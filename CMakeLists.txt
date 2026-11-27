@@ -11,7 +11,7 @@ endif()
 project(VitaTwitch C)
 include("${VITASDK}/share/vita.cmake" REQUIRED)
 
-set(VITA_APP_NAME "VitaTwitch")
+set(VITA_APP_NAME "Twitch")
 set(VITA_TITLEID  "VTWI00001")
 set(VITA_VERSION  "01.33")
 
