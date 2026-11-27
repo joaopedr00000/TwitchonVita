@@ -26,23 +26,22 @@ void ui_text(int x, int y, unsigned color, float scale, const char *s)
 
 void ui_text_fit(int x, int y, int max_w, unsigned color, float scale, const char *s)
 {
+    if(!s||max_w<=0||scale<=0)return;
     char buf[256];
-    snprintf(buf, sizeof(buf), "%s", s);
-    if (ui_text_w(scale, buf) <= max_w) {
-        ui_text(x, y, color, scale, buf);
-        return;
+    size_t len=strlen(s);
+    size_t n=len<sizeof(buf)-1?len:sizeof(buf)-1;
+    if(n<len)while(n>0&&((unsigned char)s[n]&0xC0)==0x80)n--;
+    memcpy(buf,s,n);buf[n]=0;
+    if(n==len&&ui_text_w(scale,buf)<=max_w){ui_text(x,y,color,scale,buf);return;}
+    if(ui_text_w(scale,"...")>max_w)return;
+    if(n>sizeof(buf)-4)n=sizeof(buf)-4;
+    while(n>0&&((unsigned char)s[n]&0xC0)==0x80)n--;
+    for(;;){
+        memcpy(buf+n,"...",4);
+        if(ui_text_w(scale,buf)<=max_w){ui_text(x,y,color,scale,buf);return;}
+        if(n==0)return;
+        do{n--;}while(n>0&&((unsigned char)s[n]&0xC0)==0x80);
     }
-    size_t n = strlen(buf);
-    while (n > 0) {
-        /* step back one UTF-8 character */
-        do { n--; } while (n > 0 && ((unsigned char)buf[n] & 0xC0) == 0x80);
-        if (n + 4 > sizeof(buf))
-            continue;
-        memcpy(buf + n, "...", 4);
-        if (ui_text_w(scale, buf) <= max_w)
-            break;
-    }
-    ui_text(x, y, color, scale, buf);
 }
 
 void ui_text_center(int cx, int y, unsigned color, float scale, const char *s)
