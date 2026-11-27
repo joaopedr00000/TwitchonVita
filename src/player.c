@@ -973,7 +973,7 @@ int player_run(const player_params_t *pp, char *err, int errlen)
     int cur = -1;                 /* slot on screen */
     int presented = 0, late_dropped = 0;
     uint64_t start_us = sceKernelGetProcessTimeWide();
-    uint64_t last_draw = 0, last_tick = 0, last_stats = start_us, osd_until = start_us + 5000000;
+    uint64_t last_draw = 0, last_tick = 0, last_stats = start_us, osd_until = start_us + 5000000ULL;
     uint64_t last_present = 0, max_present_gap = 0;
     uint64_t draw_us = 0, draw_max = 0;
     unsigned draw_n = 0;
@@ -1013,14 +1013,14 @@ int player_run(const player_params_t *pp, char *err, int errlen)
                                     chat_start(pp->login);
                             }
                             break;
-                        case 1:view.osd=!view.osd;osd_until=0;refresh_viewers=view.osd;view.menu=0;break;
+                        case 1:view.osd=!view.osd;osd_until=view.osd?now_us+5000000ULL:0;refresh_viewers=view.osd;last_draw=0;view.menu=0;break;
                         case 2:view.menu=0;break;
                         case 3:should_exit=1;break;
                     }
                 }
             }else{
                 if(pressed&pp->btn_back)should_exit=1;
-                if(pressed&SCE_CTRL_TRIANGLE){view.osd=!view.osd;osd_until=0;refresh_viewers=view.osd;}
+                if(pressed&SCE_CTRL_TRIANGLE){view.osd=!view.osd;osd_until=view.osd?now_us+5000000ULL:0;refresh_viewers=view.osd;last_draw=0;}
                 if((pressed&SCE_CTRL_SQUARE)&&pp->chat_on&&pp->login){
                     *pp->chat_on=!*pp->chat_on;
                     if(*pp->chat_on&&!chat_running())
@@ -1035,7 +1035,7 @@ int player_run(const player_params_t *pp, char *err, int errlen)
                     snprintf(view.volume_notice,sizeof(view.volume_notice),"%s: %d%%",vt_opt(VT_O_VOLUME),v);
                     view.notice=view.volume_notice;view.notice_until=now_us+2000000ULL;
                 }
-                if(input.touch_tap){view.osd=!view.osd;osd_until=0;refresh_viewers=view.osd;}
+                if(input.touch_tap){view.osd=!view.osd;osd_until=view.osd?now_us+5000000ULL:0;refresh_viewers=view.osd;last_draw=0;}
             }
         }
         if(should_exit)break;
@@ -1050,9 +1050,10 @@ int player_run(const player_params_t *pp, char *err, int errlen)
             if(task_start(&viewer_task,viewer_fetch,&viewer_job)==0)view.viewers_busy=1;
             last_draw=0;
         }
-        if (osd_until && now_us > osd_until) {
+        if (osd_until && now_us >= osd_until) {
             view.osd = 0;
             osd_until = 0;
+            last_draw = 0;
         }
         if (now_us - last_tick > 1000000) {
             sceKernelPowerTick(SCE_KERNEL_POWER_TICK_DEFAULT); /* keep the screen on */
