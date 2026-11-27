@@ -2,6 +2,7 @@
 #define VT_PLAYER_H
 
 #include <vita2d.h>
+#include "m3u8.h"
 
 typedef struct {
     const char *url;        /* media playlist of the chosen quality */
@@ -21,6 +22,9 @@ typedef struct {
     int diagnostics;
     char *ad_backup_url; /* optional M3U8_URL_MAX output */
     int *volume;
+    m3u8_variant_t *const *variants; /* existing compatible live variants */
+    int variant_count, variant_current;
+    int *variant_requested; /* output index on PLAYER_CHANGE_QUALITY */
     int *viewer_count;      /* last snapshot, -1 when not available */
     int *chat_on;           /* in/out: chat panel visible (remembered by the caller) */
 } player_params_t;
@@ -30,6 +34,7 @@ typedef struct {
 #define PLAYER_RECONNECT 1
 #define PLAYER_LOWER_QUALITY 2
 #define PLAYER_AD_SWITCH 3
+#define PLAYER_CHANGE_QUALITY 4
 int player_run(const player_params_t *pp, char *err, int errlen);
 
 #endif
