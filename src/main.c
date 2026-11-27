@@ -45,7 +45,7 @@ int _newlib_heap_size_user = 96 * 1024 * 1024;
 #define SETTINGS_FILE DATA_DIR "/settings.txt"
 #define LOG_FILE      DATA_DIR "/log.txt"
 #define LOG_PREV_FILE DATA_DIR "/log_prev.txt"
-#define APP_VERSION   "1.33-classic-uifix1"
+#define APP_VERSION   "1.33-classic-uifix2"
 
 #define MAX_ITEMS 100
 
@@ -501,7 +501,7 @@ static void draw_header(void)
         int end=gx+1;while(end<24&&(mask&(1u<<end)))end++;
         vita2d_draw_rectangle(28+gx*1.45f,22+gy*1.45f,(end-gx)*1.45f,1.45f,C_WHITE);gx=end;
     }
-    ui_text(70,52,C_WHITE,1.65f,"Twitch");
+    ui_text_fit(70,52,SIDE_X+SIDE_W-70,C_WHITE,1.65f,"Twitch");
     ui_text_fit(SIDE_X,78,SIDE_W,C_GREY,0.62f,"TwitchonVita");
     int active=side_active();
     for(int i=0;i<SIDE_COUNT;i++){
@@ -1031,13 +1031,14 @@ static int login_poll_run(void *arg, volatile int *abort_flag)
 
 static void account_logged_in(void)
 {
+    const int w=620,h=280,x0=(SCREEN_W-w)/2,y0=(SCREEN_H-h)/2;
     char name[80];
     ui_clean_text(g_auth.display[0] ? g_auth.display : g_auth.login, name, sizeof(name));
     for (;;) {
         ui_input_poll(&g_in);
-        if (g_in.pressed & g_btn_back)
+        if ((g_in.pressed & g_btn_back)||ui_touch_hit(&g_in,x0+324,y0+h-62,270,42))
             return;
-        if (g_in.pressed & SCE_CTRL_TRIANGLE) {
+        if ((g_in.pressed & SCE_CTRL_TRIANGLE)||ui_touch_hit(&g_in,x0+26,y0+h-62,270,42)) {
             LOGI("sesion cerrada por el usuario");
             if (g_auth_checking) {
                 task_cancel(&g_auth_task);
@@ -1056,15 +1057,18 @@ static void account_logged_in(void)
         frame_begin();
         draw_home();
         int x, y;
-        draw_modal_box(500, 220, &x, &y);
-        draw_avatar(g_auth.avatar, name, x + 28, y + 34, 72);
-        ui_text_fit(x + 120, y + 64, 350, C_WHITE, 1.3f, name);
+        draw_modal_box(w,h,&x,&y);
+        draw_avatar(g_auth.avatar,name,x+26,y+26,76);
+        ui_text_fit(x+122,y+55,w-148,C_WHITE,1.3f,name);
         char at[48];
-        snprintf(at, sizeof(at), "@%s", g_auth.login);
-        ui_text(x + 120, y + 94, C_GREY, 0.9f, at);
-        ui_text(x + 28, y + 150, C_GREY, 0.85f, vt_msg("Sesion iniciada: Siguiendo y anuncios segun tu cuenta."));
-        ui_hint(x + 28, y + 196, "\xE2\x96\xB3", vt_msg("Cerrar sesion"));
-        ui_hint(x + 260, y + 196, g_back_name, vt_msg("Volver"));
+        snprintf(at,sizeof(at),"@%s",g_auth.login);
+        ui_text_fit(x+122,y+86,w-148,C_GREY,0.9f,at);
+        vita2d_draw_rectangle(x+26,y+116,w-52,1,C_PANEL2);
+        wrap_text(x+26,y+145,w-52,C_GREY,0.9f,vt_msg("Sesion iniciada: Siguiendo y anuncios segun tu cuenta."),3);
+        vita2d_draw_rectangle(x+26,y+h-62,270,42,CLASSIC_TILE);
+        vita2d_draw_rectangle(x+324,y+h-62,270,42,CLASSIC_PURPLE);
+        footer_hint(x+38,246,y+h-35,"△",vt_msg("Cerrar sesion"));
+        footer_hint(x+336,246,y+h-35,g_back_name,vt_msg("Volver"));
         frame_end();
     }
 }
@@ -1149,19 +1153,19 @@ static void account_login(void)
         draw_home();
         int x, y, w = 640, h = 330;
         draw_modal_box(w, h, &x, &y);
-        ui_text(x + 32, y + 50, C_WHITE, 1.3f, vt_msg("Iniciar sesion en Twitch"));
-        ui_text(x + 32, y + 92, C_GREY, 0.95f, vt_msg("1. En tu movil o PC abre:"));
+        ui_text_fit(x+32,y+50,w-64,C_WHITE,1.3f,vt_msg("Iniciar sesion en Twitch"));
+        ui_text_fit(x+32,y+92,w-64,C_GREY,0.95f,vt_msg("1. En tu movil o PC abre:"));
         ui_text(x + 60, y + 128, C_PURPLE, 1.4f, "twitch.tv/activate");
-        ui_text(x + 32, y + 168, C_GREY, 0.95f, vt_msg("2. Inicia sesion e introduce este codigo:"));
+        ui_text_fit(x+32,y+168,w-64,C_GREY,0.95f,vt_msg("2. Inicia sesion e introduce este codigo:"));
         ui_round_rect(x + 60, y + 184, 300, 64, 10, C_PANEL2);
         ui_text_center(x + 210, y + 230, C_WHITE, 2.0f, code);
         ui_spinner(x + 400, y + 216, 10, C_PURPLE);
-        ui_text(x + 422, y + 222, C_GREY, 0.85f, vt_msg("Esperando..."));
+        ui_text_fit(x+422,y+222,w-450,C_GREY,0.85f,vt_msg("Esperando..."));
         unsigned long long left = expires > now ? (expires - now) / 1000000ULL : 0;
         char t[64];
         snprintf(t, sizeof(t), vt_msg("El codigo caduca en %llu:%02llu"), left / 60, left % 60);
-        ui_text(x + 32, y + h - 50, C_DIM, 0.8f, t);
-        ui_hint(x + w - 150, y + h - 22, g_back_name, vt_msg("Cancelar"));
+        ui_text_fit(x+32,y+h-50,w-64,C_GREY,0.8f,t);
+        footer_hint(x+w-200,176,y+h-22,g_back_name,vt_msg("Cancelar"));
         frame_end();
     }
 }
@@ -1270,7 +1274,7 @@ static void region_screen(void)
 static void extras_menu(void)
 {
     /* All entries share the same hit boxes for touch and controller use. */
-    const int x=145,y=20,w=670,h=504,row=35,count=12;
+    const int x=120,y=18,w=720,h=508,row=35,count=12;
     int sel=0;
     for(;;) {
         ui_input_poll(&g_in);
@@ -1280,7 +1284,7 @@ static void extras_menu(void)
         int choose=!!(g_in.pressed&g_btn_ok);
         if(g_in.touch_tap){
             for(int i=0;i<count;i++)
-                if(ui_touch_hit(&g_in,x+14,y+68+i*row,w-28,row-4)){sel=i;choose=1;break;}
+                if(ui_touch_hit(&g_in,x+14,y+62+i*row,w-28,row-3)){sel=i;choose=1;break;}
             if(!choose && !ui_touch_hit(&g_in,x,y,w,h))return;
         }
         if(choose){
@@ -1301,19 +1305,30 @@ static void extras_menu(void)
         }
         frame_begin();draw_home();
         int bx,by;draw_modal_box(w,h,&bx,&by);
-        ui_text(x+26,y+41,C_WHITE,1.2f,vt_tr(VT_I_SETTINGS));
+        ui_text_fit(x+26,y+39,w-52,C_WHITE,1.2f,vt_tr(VT_I_SETTINGS));
+        vita2d_draw_rectangle(x+24,y+49,w-48,1,C_PANEL2);
         for(int i=0;i<count;i++){
-            int yy=y+68+i*row;
-            if(sel==i)ui_round_rect(x+14,yy,w-28,row-4,7,C_PURPLE);
+            int yy=y+62+i*row;
+            vita2d_draw_rectangle(x+14,yy,w-28,row-3,sel==i?CLASSIC_PURPLE:(i%2?CLASSIC_TILE:C_PANEL));
+            if(sel==i)vita2d_draw_rectangle(x+14,yy,3,row-3,C_WHITE);
             const char *label=i==0?vt_tr(VT_I_ACCOUNT):i==1?vt_tr(VT_I_LANGUAGE):
                 i==2?vt_tr(VT_I_TOUCH):i==3?vt_tr(VT_I_CHAT):
                 i==4?vt_tr(VT_I_CLEAR_CACHE):i==5?vt_tr(VT_I_ABOUT):i==6?vt_opt(VT_O_PROFILE):i==7?vt_opt(VT_O_AUTO):i==8?vt_opt(VT_O_DIAG):i==9?vt_opt(VT_O_REMEMBER):i==10?region_title():vt_tr(VT_I_CLOSE);
-            ui_text_fit(x+32,yy+31,w-220,C_WHITE,0.97f,label);
-            if(i==1) ui_text_fit(x+w-182,yy+31,157,C_GREY,0.76f,vt_lang_code(vt_lang_current()));
-            if(i==10)ui_text_fit(x+w-215,yy+27,190,C_WHITE,0.83f,region_label(g_region));
-            if(i==6)ui_text_fit(x+w-215,yy+31,190,C_WHITE,0.83f,vt_opt((vt_option_id)(VT_O_ECONOMY+g_profile)));
-            if(i==2||i==3||i==7||i==8||i==9)ui_text_fit(x+w-215,yy+31,190,C_WHITE,0.83f,
-                (i==2?ui_touch_enabled():i==3?g_chat_on:i==7?g_auto_quality:i==8?g_diag:g_remember)?vt_tr(VT_I_ON):vt_tr(VT_I_OFF));
+            ui_text_fit(x+32,yy+23,w-280,C_WHITE,0.95f,label);
+            const char *value=NULL;
+            int toggle=i==2||i==3||i==7||i==8||i==9,enabled=0;
+            if(i==1)value=vt_lang_name(vt_lang_current());
+            if(i==10)value=region_label(g_region);
+            if(i==6)value=vt_opt((vt_option_id)(VT_O_ECONOMY+g_profile));
+            if(toggle){
+                enabled=i==2?ui_touch_enabled():i==3?g_chat_on:i==7?g_auto_quality:i==8?g_diag:g_remember;
+                value=vt_tr(enabled?VT_I_ON:VT_I_OFF);
+                vita2d_draw_rectangle(x+w-38,yy+10,10,12,enabled?C_GREEN:C_DIM);
+            }
+            if(value){
+                int avail=toggle?185:210,tw=ui_text_w(0.83f,value);if(tw>avail)tw=avail;
+                ui_text_fit(x+w-(toggle?48:30)-tw,yy+23,tw,sel==i?C_WHITE:C_GREY,0.83f,value);
+            }
         }
         frame_end();
     }
