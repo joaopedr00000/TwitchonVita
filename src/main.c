@@ -45,7 +45,7 @@ int _newlib_heap_size_user = 96 * 1024 * 1024;
 #define SETTINGS_FILE DATA_DIR "/settings.txt"
 #define LOG_FILE      DATA_DIR "/log.txt"
 #define LOG_PREV_FILE DATA_DIR "/log_prev.txt"
-#define APP_VERSION   "1.33-classic-uifix2"
+#define APP_VERSION   "1.33-classic-viewers1"
 
 #define MAX_ITEMS 100
 
@@ -795,10 +795,12 @@ static char play_login[64],play_display[96],play_title[256];
 enum { PLAY_IDLE, PLAY_FETCH, PLAY_CANCEL, PLAY_CHOOSE, PLAY_LAUNCH };
 static int play_state;
 static int play_armed;
+static int play_viewers=-1;
 
-static void play_channel(const char *login,const char *display,const char *title)
+static void play_channel(const char *login,const char *display,const char *title,int viewers)
 {
     if(play_state!=PLAY_IDLE)return;
+    play_viewers=viewers;
     if(!net_connected()){
         modal_message(vt_msg("Sin conexion"),vt_msg("Conecta la Vita a una red Wi-Fi e intentalo de nuevo."));
         return;
@@ -854,6 +856,7 @@ static void play_selected(void)
     pp.chat_nick = g_logged ? g_auth.login : NULL;
     pp.chat_oauth = g_logged ? g_auth.access : NULL;
     pp.chat_on = &g_chat_on;
+    pp.viewer_count = &play_viewers;
     pp.profile=g_profile;pp.auto_quality=g_auto_quality;
     pp.has_lower=vt_profile_lower(play_list,play_count,play_list[sel])>=0;
     pp.diagnostics=g_diag;pp.volume=&g_volume;
@@ -1440,7 +1443,7 @@ static void open_selected(void)
     if (tb->state != LS_READY || tb->sel < 0 || tb->sel >= tb->count || home_pos(tb)<0)
         return;
     twitch_stream_t s = tb->items[tb->sel]; /* copy: the list may refresh meanwhile */
-    play_channel(s.login, s.display, s.title);
+    play_channel(s.login, s.display, s.title,s.live?s.viewers:-1);
 }
 
 static void home_switch(int t)
@@ -1576,7 +1579,7 @@ int main(void)
         if (g_tab == TAB_SEARCH && (p & SCE_CTRL_SQUARE) && g_search[0]) {
             char login[32];
             if (twitch_sanitize_login(g_search, login, sizeof(login)) >= 3)
-                play_channel(login, login, NULL);
+                play_channel(login, login, NULL,-1);
             else
                 toast(vt_msg("Ese nombre no es un canal valido"));
             continue;
