@@ -402,6 +402,7 @@ static int home_move(int pos,int n,int dx,int dy)
         if(primary<=0)continue;
         /* Prefer an overlapping row/column, then proximity. */
         int overlap=dx?(a.y<b.y+b.h&&b.y<a.y+a.h):(a.x<b.x+b.w&&b.x<a.x+a.w);
+        if(dx&&!overlap)continue;
         int s=primary+cross*3+(overlap?0:1200);
         if(s<score){score=s;best=i;}
     }
@@ -552,11 +553,13 @@ static void draw_home(void)
         float target=tb->scroll;
         if(pos>=0){home_rect_t r=home_rect(pos);if(r.y<target)target=r.y;if(r.y+r.h>target+FOOTER_Y-top-8)target=r.y+r.h-(FOOTER_Y-top-8);}
         else target=0;
-        if(target<0)target=0;if(target>max)target=max;
+        if(target<0)target=0;
+        if(target>max)target=max;
         tb->scroll+=(target-tb->scroll)*0.35f;
         if(tb->scroll-target<0.5f&&target-tb->scroll<0.5f)tb->scroll=target;
     }
-    if(tb->scroll<0)tb->scroll=0;if(tb->scroll>max)tb->scroll=max;
+    if(tb->scroll<0)tb->scroll=0;
+    if(tb->scroll>max)tb->scroll=max;
     if(n){
         for(int i=0;i<n;i++){
             int idx=home_index(tb,i);if(idx<0)continue;
