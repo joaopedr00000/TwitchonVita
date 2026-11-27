@@ -1,7 +1,7 @@
 name: VitaTwitch — 19 languages, touch and chat SEND experimental checks
 on:
   push:
-    branches: ['features/i18n19-touch-select-chat-send']
+    branches: ['features/i18n19-touch-select-chat-send', 'visual/twitch-classic']
   workflow_dispatch:
 permissions:
   contents: read
@@ -96,15 +96,16 @@ jobs:
             sfo=z.read('sce_sys/param.sfo')
             assert b'VTWI00001' in sfo
             assert b'01.33' in sfo
+            assert b'Twitch\x00' in sfo
           print('PASS experimental VitaSDK VPK, version 01.33, title ID and trusted IRC CA bundle')
           PY
-          cp build-ci/VitaTwitch.vpk VitaTwitch-1.33-PlayFix5.vpk
-          sha256sum VitaTwitch-1.33-PlayFix5.vpk > SHA256SUMS.txt
+          cp build-ci/VitaTwitch.vpk Twitch-1.33-Classic.vpk
+          sha256sum Twitch-1.33-Classic.vpk > SHA256SUMS.txt
       - uses: actions/upload-artifact@v4
         with:
-          name: VitaTwitch-1.33-PlayFix5-EXPERIMENTAL
+          name: Twitch-1.33-Classic-EXPERIMENTAL
           path: |
-            VitaTwitch-1.33-PlayFix5.vpk
+            Twitch-1.33-Classic.vpk
             SHA256SUMS.txt
             ca-bundle.sha256
           retention-days: 14
