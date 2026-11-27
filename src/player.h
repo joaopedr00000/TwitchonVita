@@ -21,6 +21,7 @@ typedef struct {
     int diagnostics;
     char *ad_backup_url; /* optional M3U8_URL_MAX output */
     int *volume;
+    int *viewer_count;      /* last snapshot, -1 when not available */
     int *chat_on;           /* in/out: chat panel visible (remembered by the caller) */
 } player_params_t;
 
