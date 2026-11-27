@@ -45,7 +45,7 @@ int _newlib_heap_size_user = 96 * 1024 * 1024;
 #define SETTINGS_FILE DATA_DIR "/settings.txt"
 #define LOG_FILE      DATA_DIR "/log.txt"
 #define LOG_PREV_FILE DATA_DIR "/log_prev.txt"
-#define APP_VERSION   "1.33-classic-viewers2"
+#define APP_VERSION   "1.33-classic-quality1"
 
 #define MAX_ITEMS 100
 
@@ -837,6 +837,7 @@ static void play_selected(void)
     ui_clean_text(title ? title : "", clean_title, sizeof(clean_title));
     player_params_t pp;
     int retries=0, reductions=0, r=0, ad_switched=0;
+    int requested=-1,rollback=-1,manual=0;
     static char ad_backup[M3U8_URL_MAX];
     ad_backup[0]=0;
     char wanted[48];
@@ -857,17 +858,41 @@ static void play_selected(void)
     pp.chat_oauth = g_logged ? g_auth.access : NULL;
     pp.chat_on = &g_chat_on;
     pp.viewer_count = &play_viewers;
-    pp.profile=g_profile;pp.auto_quality=g_auto_quality;
+    pp.variants=play_list;pp.variant_count=play_count;pp.variant_current=sel;
+    requested=-1;pp.variant_requested=&requested;
+    pp.profile=g_profile;pp.auto_quality=g_auto_quality&&!manual;
     pp.has_lower=vt_profile_lower(play_list,play_count,play_list[sel])>=0;
     pp.diagnostics=g_diag;pp.volume=&g_volume;
     pp.ad_backup_url=ad_switched?NULL:ad_backup;
     LOGI("startup: selected %s %s %dx%d %.0f fps", login, pp.quality, pp.width, pp.height, pp.fps);
     scePowerSetArmClockFrequency(vt_profile_clock(g_profile,pp.height,pp.fps));
     LOGI("startup: entering player");
+    unsigned long long opened_at=sceKernelGetProcessTimeWide();
     r = player_run(&pp, err, sizeof(err));
+    unsigned long long elapsed=sceKernelGetProcessTimeWide()-opened_at;
     LOGI("quality flow: player returned %d",r);
     scePowerSetArmClockFrequency(333);
     settings_save();
+    if(r==PLAYER_CHANGE_QUALITY&&requested>=0&&requested<play_count&&requested!=sel){
+        rollback=sel;sel=requested;manual=1;retries=0;reductions=0;ad_switched=0;ad_backup[0]=0;
+        snprintf(g_pref_quality,sizeof(g_pref_quality),"%s",play_list[sel]->name);
+        settings_save();
+        LOGI("player: manual quality change to %s",g_pref_quality);
+        vita2d_start_drawing();vita2d_clear_screen();
+        ui_spinner(SCREEN_W/2,SCREEN_H/2-32,14,C_PURPLE);
+        ui_text_center(SCREEN_W/2,SCREEN_H/2+12,C_WHITE,1.0f,vt_tr(VT_I_QUALITY));
+        ui_text_center(SCREEN_W/2,SCREEN_H/2+42,C_GREY,0.85f,g_pref_quality);
+        frame_end();
+        continue;
+    }
+    if(r<0&&rollback>=0&&rollback<play_count&&elapsed<15000000ULL){
+        sel=rollback;rollback=-1;ad_switched=0;ad_backup[0]=0;
+        snprintf(g_pref_quality,sizeof(g_pref_quality),"%s",play_list[sel]->name);
+        settings_save();
+        LOGW("player: selected quality failed, restoring %s",g_pref_quality);
+        continue;
+    }
+    rollback=-1;
     if(r==PLAYER_AD_SWITCH && !ad_switched && ad_backup[0]){
         ad_switched=1;
         snprintf(play_list[sel]->url,sizeof(play_list[sel]->url),"%s",ad_backup);
