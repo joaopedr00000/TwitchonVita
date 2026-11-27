@@ -1,0 +1,59 @@
+name: Publish VitaTwitch v1.33
+on:
+  push:
+    branches: ['release/v1.33']
+  workflow_dispatch:
+permissions:
+  contents: write
+  actions: read
+concurrency:
+  group: publish-vita-v1-33
+  cancel-in-progress: false
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    if: github.repository == 'joaopedr00000/TwitchonVita' && github.ref == 'refs/heads/release/v1.33'
+    steps:
+      - name: Download hardware-tested PlayFix 5 build
+        uses: actions/download-artifact@v4
+        with:
+          name: VitaTwitch-1.33-PlayFix5-EXPERIMENTAL
+          run-id: 46053351657
+          github-token: ${{ github.token }}
+          path: dist
+      - name: Verify exact artifact and prepare release
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum -c SHA256SUMS.txt
+          python3 - <<'PY'
+          import zipfile
+          with zipfile.ZipFile('VitaTwitch-1.33-PlayFix5.vpk') as z:
+              assert z.testzip() is None
+              assert 'eboot.bin' in z.namelist()
+              sfo=z.read('sce_sys/param.sfo')
+              assert b'VTWI00001' in sfo and b'01.33' in sfo
+          PY
+          mv VitaTwitch-1.33-PlayFix5.vpk VitaTwitch-1.33.vpk
+          sha256sum VitaTwitch-1.33.vpk > SHA256SUMS.txt
+      - name: Publish official release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          cat > /tmp/release-notes.md <<'EOF'
+          - Redesigned TV-style interface, focused channel cards, dark purple theme, and compact playback overlays.
+          - 19 interface languages, expanded Brazilian Portuguese translations, automatic system-language detection, and persistent language settings.
+          - Front touchscreen support for navigation, scrolling, stream quality selection, and the SELECT extras menu.
+          - Explore filters by broadcast language, with automatic, all-language, and manual options.
+          - Four playback profiles: Economy, Balanced, Low Latency, and Quality.
+          - Optional automatic quality selection and downward quality switching, automatic reconnection, adaptive audio buffering, volume controls, and playback diagnostics.
+          - Improved HLS ad detection and experimental alternate-stream recovery.
+          - Improved playback stability, bounded memory usage, nonblocking quality selection, and safer video, audio, download, and chat thread management.
+          - Restored and stabilized the original read-only Twitch chat with 7TV emotes and badges.
+          - Expanded automated regression tests and VitaSDK build validation.
+          EOF
+          gh release create v1.33 dist/VitaTwitch-1.33.vpk dist/SHA256SUMS.txt --repo "$GH_REPO" --target 2cd01f94dc5d4f19815e75f87e37edc51ffa9e0b --title "VitaTwitch 1.33" --notes-file /tmp/release-notes.md --latest
