@@ -23,6 +23,10 @@
 #include "i18n.h"
 #include "ime_utf8.h"
 #include "playback_policy.h"
+#include "task.h"
+#include "twitch.h"
+#include "http.h"
+#include "json.h"
 #include <psp2/power.h>
 
 #include <malloc.h>
@@ -707,9 +711,45 @@ static void vpipe_stop(vpipe_t *vp)
 
 /* ---------------------------------------------------------------- drawing */
 
+/* Public count only: no OAuth, no recurring requests, verified TLS.
+ * A single cancellable worker keeps network I/O out of the render loop. */
+typedef struct {
+    char login[32];
+    int count;
+} viewer_job_t;
+static int viewer_fetch(void *arg,volatile int *abort_flag)
+{
+    viewer_job_t *j=arg;
+    char login[32],body[256];
+    if(twitch_sanitize_login(j->login,login,sizeof(login))<1||strcmp(login,j->login))return -1;
+    snprintf(body,sizeof(body),"{\"query\":\"query { user(login: \\\"%s\\\") { stream { viewersCount } } }\"}",login);
+    CURL *curl=http_new();if(!curl)return -1;
+    curl_easy_setopt(curl,CURLOPT_SSL_VERIFYPEER,1L);
+    curl_easy_setopt(curl,CURLOPT_SSL_VERIFYHOST,2L);
+    curl_easy_setopt(curl,CURLOPT_CAINFO,"app0:ca/cacert.pem");
+    curl_easy_setopt(curl,CURLOPT_FOLLOWLOCATION,0L);
+    curl_easy_setopt(curl,CURLOPT_CONNECTTIMEOUT,5L);
+    curl_easy_setopt(curl,CURLOPT_TIMEOUT,8L);
+    struct curl_slist *headers=NULL;
+    headers=curl_slist_append(headers,"Client-ID: " TWITCH_CLIENT_ID);
+    struct curl_slist *next=curl_slist_append(headers,"Content-Type: text/plain;charset=UTF-8");
+    if(!next){curl_slist_free_all(headers);http_free(curl);return -1;}
+    headers=next;
+    buf_t response={0};long status=0;int rc=-1;
+    if(http_request(curl,"https://gql.twitch.tv/gql",body,headers,&response,&status,abort_flag)==0&&status==200&&response.data){
+        json_t *root=json_parse((const char *)response.data);
+        json_t *value=json_path(root,"data.user.stream.viewersCount");
+        if(value&&value->type==JSON_NUMBER&&value->num>=0&&value->num<=2147483647.0){j->count=(int)value->num;rc=0;}
+        json_free(root);
+    }
+    buf_free(&response);curl_slist_free_all(headers);http_free(curl);
+    return rc;
+}
+
 typedef struct {
     const player_params_t *pp;
     int osd;
+    int viewers_busy;
     int dropped;
     float fps_now;
     int cpu_mhz;
@@ -776,11 +816,17 @@ static void draw_view(const vslot_t *frame, view_t *vw)
             }
             vita2d_pgf_draw_text(f, 14, 54, COLOR_GREY, 0.85f, t);
         }
-        vita2d_draw_rectangle(0, SCREEN_H - 32, AW, 32, COLOR_OSD_BG);
-        vita2d_pgf_draw_text(f, 14, SCREEN_H - 10, COLOR_GREY, 0.8f,
-                             vw->pp->btn_back == SCE_CTRL_CIRCLE
-                                 ? vt_msg("O: salir    Triangulo: info    Cuadrado: chat")
-                                 : vt_msg("X: salir    Triangulo: info    Cuadrado: chat"));
+        vita2d_draw_rectangle(0,SCREEN_H-36,AW,36,COLOR_OSD_BG);
+        int count=vw->pp->viewer_count?*vw->pp->viewer_count:-1;
+        char digits[32],caption[96];
+        if(count>=0)ui_fmt_viewers(count,digits,sizeof(digits));
+        else snprintf(digits,sizeof(digits),"%s",vw->viewers_busy?"...":"--");
+        snprintf(caption,sizeof(caption),vt_msg("%s espectadores"),digits);
+        int vw_width=ui_text_w(0.8f,caption)+20;if(vw_width>AW/2)vw_width=AW/2;
+        ui_text_fit(AW-vw_width,SCREEN_H-12,vw_width-12,C_WHITE,0.8f,caption);
+        if(vw->viewers_busy)ui_spinner(AW-vw_width-8,SCREEN_H-19,5,C_PURPLE);
+        ui_text_fit(14,SCREEN_H-12,AW-vw_width-36,COLOR_GREY,0.73f,
+            vw->pp->btn_back==SCE_CTRL_CIRCLE?vt_msg("O: salir    Triangulo: info    Cuadrado: chat"):vt_msg("X: salir    Triangulo: info    Cuadrado: chat"));
     }
     if(vw->pp->diagnostics && !vw->menu){
         char a[160],b[160];
@@ -920,6 +966,9 @@ int player_run(const player_params_t *pp, char *err, int errlen)
     ui_input_t input={0};
     ui_input_poll(&input); /* swallow X from quality selector */
     int should_exit=0;
+    task_t viewer_task={0};viewer_job_t viewer_job={0};
+    if(pp->login)snprintf(viewer_job.login,sizeof(viewer_job.login),"%s",pp->login);
+    uint64_t viewer_last_request=0;
 
     int cur = -1;                 /* slot on screen */
     int presented = 0, late_dropped = 0;
@@ -939,6 +988,7 @@ int player_run(const player_params_t *pp, char *err, int errlen)
 
         ui_input_poll(&input);
         unsigned pressed=input.pressed;
+        int refresh_viewers=0;
         {
             int accept=pp->btn_back==SCE_CTRL_CIRCLE?SCE_CTRL_CROSS:SCE_CTRL_CIRCLE;
             if(pressed&SCE_CTRL_SELECT){view.menu=!view.menu;view.menu_sel=0;last_draw=0;}
@@ -963,14 +1013,14 @@ int player_run(const player_params_t *pp, char *err, int errlen)
                                     chat_start(pp->login);
                             }
                             break;
-                        case 1:view.osd=!view.osd;osd_until=0;break;
+                        case 1:view.osd=!view.osd;osd_until=0;refresh_viewers=view.osd;view.menu=0;break;
                         case 2:view.menu=0;break;
                         case 3:should_exit=1;break;
                     }
                 }
             }else{
                 if(pressed&pp->btn_back)should_exit=1;
-                if(pressed&SCE_CTRL_TRIANGLE){view.osd=!view.osd;osd_until=0;}
+                if(pressed&SCE_CTRL_TRIANGLE){view.osd=!view.osd;osd_until=0;refresh_viewers=view.osd;}
                 if((pressed&SCE_CTRL_SQUARE)&&pp->chat_on&&pp->login){
                     *pp->chat_on=!*pp->chat_on;
                     if(*pp->chat_on&&!chat_running())
@@ -985,10 +1035,21 @@ int player_run(const player_params_t *pp, char *err, int errlen)
                     snprintf(view.volume_notice,sizeof(view.volume_notice),"%s: %d%%",vt_opt(VT_O_VOLUME),v);
                     view.notice=view.volume_notice;view.notice_until=now_us+2000000ULL;
                 }
-                if(input.touch_tap){view.osd=!view.osd;osd_until=0;}
+                if(input.touch_tap){view.osd=!view.osd;osd_until=0;refresh_viewers=view.osd;}
             }
         }
         if(should_exit)break;
+        if(view.viewers_busy&&task_done(&viewer_task)){
+            view.viewers_busy=0;
+            if(viewer_task.result==0&&pp->viewer_count)*pp->viewer_count=viewer_job.count;
+            last_draw=0;
+        }
+        if(refresh_viewers&&!view.viewers_busy&&viewer_job.login[0]&&pp->viewer_count&&
+           (!viewer_last_request||now_us-viewer_last_request>=2000000ULL)){
+            viewer_last_request=now_us;
+            if(task_start(&viewer_task,viewer_fetch,&viewer_job)==0)view.viewers_busy=1;
+            last_draw=0;
+        }
         if (osd_until && now_us > osd_until) {
             view.osd = 0;
             osd_until = 0;
@@ -1167,6 +1228,7 @@ int player_run(const player_params_t *pp, char *err, int errlen)
          view.dropped, vp->total_errors, pl->rebuffers, ret < 0 ? ", motivo: " : " (salida del usuario)",
          ret < 0 ? err : "");
 
+    if(view.viewers_busy){task_cancel(&viewer_task);while(!task_done(&viewer_task))sceKernelDelayThread(10000);}
     /* teardown: unblock producers first, then stop threads */
     pq_abort(&pl->vq);
     pq_abort(&pl->aq);
