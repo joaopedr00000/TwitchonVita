@@ -757,6 +757,7 @@ typedef struct {
     const char *status;   /* centred message (buffering, ads...) or NULL */
     int menu;             /* in-player extras opened by SELECT */
     int menu_sel;
+    int quality_menu,quality_sel,quality_top;
     const char *notice;   /* transient send/authentication feedback */
     uint64_t notice_until;
 } view_t;
@@ -828,7 +829,7 @@ static void draw_view(const vslot_t *frame, view_t *vw)
         ui_text_fit(14,SCREEN_H-12,AW-vw_width-36,COLOR_GREY,0.73f,
             vw->pp->btn_back==SCE_CTRL_CIRCLE?vt_msg("O: salir    Triangulo: info    Cuadrado: chat"):vt_msg("X: salir    Triangulo: info    Cuadrado: chat"));
     }
-    if(vw->pp->diagnostics && !vw->menu){
+    if(vw->pp->diagnostics && !vw->menu && !vw->quality_menu){
         char a[160],b[160];
         snprintf(a,sizeof(a),"%s %.1f | %s %.2f Mbps | %s %d MHz",vt_opt(VT_O_FPS),vw->fps_now,vt_opt(VT_O_RATE),g_pl.hls.download_kbps/1000.0,vt_opt(VT_O_CPU),vw->cpu_mhz);
         snprintf(b,sizeof(b),"%s %.1f s | %s %d | %s %d",vt_opt(VT_O_BUFFER),pq_span(&g_pl.aq)/90000.0,vt_opt(VT_O_REBUFFERS),g_pl.rebuffers,vt_opt(VT_O_DROPPED),vw->dropped);
@@ -836,19 +837,40 @@ static void draw_view(const vslot_t *frame, view_t *vw)
         ui_text_fit(10,91,AW-20,COLOR_WHITE,0.72f,a);
         ui_text_fit(10,116,AW-20,COLOR_WHITE,0.72f,b);
     }
-    if(vw->menu){
-        static const vt_text_id labels[]={VT_I_CHAT,VT_I_SHOW_INFO,VT_I_CLOSE,VT_I_EXIT};
+    if(vw->quality_menu){
+        int n=vw->pp->variant_count,vis=n<6?n:6;
+        const int x=210,w=540,row=48,h=120+vis*row,y=(SCREEN_H-h)/2,ly=y+55;
         vita2d_draw_rectangle(0,0,SCREEN_W,SCREEN_H,RGBA8(0,0,0,190));
-        ui_round_rect(205,95,550,354,12,C_SURFACE);
-        vita2d_pgf_draw_text(f,233,136,C_WHITE,1.25f,vt_tr(VT_I_MENU));
-        for(int i=0;i<4;i++){
-            int y=151+i*55;
+        ui_round_rect(x,y,w,h,12,C_SURFACE);
+        vita2d_draw_rectangle(x+12,y,w-24,3,C_PURPLE);
+        ui_text_fit(x+24,y+36,w-48,C_WHITE,1.15f,vt_tr(VT_I_QUALITY));
+        for(int k=0;k<vis&&vw->quality_top+k<n;k++){
+            int i=vw->quality_top+k,ry=ly+k*row;
+            const m3u8_variant_t *v=vw->pp->variants[i];
+            char info[96];
+            vita2d_draw_rectangle(x+16,ry,w-32,row-4,i==vw->quality_sel?C_PURPLE:C_PANEL);
+            if(i==vw->pp->variant_current)vita2d_draw_rectangle(x+16,ry,4,row-4,C_GREEN);
+            ui_text_fit(x+29,ry+28,162,C_WHITE,0.95f,v->name);
+            snprintf(info,sizeof(info),"%dx%d / %.0f fps",v->width,v->height,v->fps);
+            ui_text_fit(x+205,ry+28,w-241,C_WHITE,0.82f,info);
+        }
+        vita2d_draw_rectangle(x+16,y+h-52,w/2-24,38,C_PANEL2);
+        vita2d_draw_rectangle(x+w/2+8,y+h-52,w/2-24,38,C_PANEL2);
+        ui_text_fit(x+28,y+h-27,w/2-48,C_WHITE,0.88f,vt_tr(VT_I_PLAY));
+        ui_text_fit(x+w/2+20,y+h-27,w/2-48,C_WHITE,0.88f,vt_tr(VT_I_BACK));
+    }else if(vw->menu){
+        static const vt_text_id labels[]={VT_I_CHAT,VT_I_SHOW_INFO,VT_I_QUALITY,VT_I_CLOSE,VT_I_EXIT};
+        vita2d_draw_rectangle(0,0,SCREEN_W,SCREEN_H,RGBA8(0,0,0,190));
+        ui_round_rect(205,66,550,412,12,C_SURFACE);
+        ui_text_fit(233,107,494,C_WHITE,1.25f,vt_tr(VT_I_MENU));
+        for(int i=0;i<5;i++){
+            int y=122+i*65;
             if(i==vw->menu_sel)ui_round_rect(222,y,516,49,8,C_PURPLE);
             const char *label=labels[i]==VT_I_SHOW_INFO?
                  (vw->osd?vt_tr(VT_I_HIDE_INFO):vt_tr(VT_I_SHOW_INFO)):vt_tr(labels[i]);
-            vita2d_pgf_draw_text(f,245,y+32,C_WHITE,1.02f,label);
-            if(i==0)vita2d_pgf_draw_text(f,640,y+32,C_WHITE,0.8f,
-                chat?vt_tr(VT_I_ON):vt_tr(VT_I_OFF));
+            ui_text_fit(245,y+32,(i==0||i==2)?370:470,C_WHITE,1.02f,label);
+            if(i==0)ui_text_fit(625,y+32,100,C_WHITE,0.8f,chat?vt_tr(VT_I_ON):vt_tr(VT_I_OFF));
+            if(i==2)ui_text_fit(625,y+32,100,C_WHITE,0.8f,vw->pp->quality);
         }
     }
     if(vw->notice&&sceKernelGetProcessTimeWide()<vw->notice_until){
@@ -991,14 +1013,39 @@ int player_run(const player_params_t *pp, char *err, int errlen)
         int refresh_viewers=0;
         {
             int accept=pp->btn_back==SCE_CTRL_CIRCLE?SCE_CTRL_CROSS:SCE_CTRL_CIRCLE;
+            if(view.quality_menu){
+                int n=pp->variant_count,vis=n<6?n:6;
+                const int x=210,w=540,row=48,h=120+vis*row,y=(SCREEN_H-h)/2,ly=y+55;
+                int choose=!!(pressed&accept);
+                if(pressed&(pp->btn_back|SCE_CTRL_SELECT)){view.quality_menu=0;view.menu=1;choose=0;}
+                if(view.quality_menu&&n>0){
+                    if(pressed&(SCE_CTRL_UP|SCE_CTRL_LEFT))view.quality_sel=(view.quality_sel+n-1)%n;
+                    if(pressed&(SCE_CTRL_DOWN|SCE_CTRL_RIGHT))view.quality_sel=(view.quality_sel+1)%n;
+                    if(input.touch_tap){
+                        if(ui_touch_hit(&input,x+w/2+8,y+h-52,w/2-24,38)){view.quality_menu=0;view.menu=1;choose=0;}
+                        else if(ui_touch_hit(&input,x+16,y+h-52,w/2-24,38))choose=1;
+                        else for(int k=0;k<vis&&view.quality_top+k<n;k++)
+                            if(ui_touch_hit(&input,x+16,ly+k*row,w-32,row-4)){view.quality_sel=view.quality_top+k;choose=1;break;}
+                    }
+                    if(view.quality_sel<view.quality_top)view.quality_top=view.quality_sel;
+                    if(view.quality_sel>=view.quality_top+vis)view.quality_top=view.quality_sel-vis+1;
+                    if(choose&&view.quality_menu){
+                        if(view.quality_sel!=pp->variant_current&&pp->variant_requested){
+                            *pp->variant_requested=view.quality_sel;ret=PLAYER_CHANGE_QUALITY;should_exit=1;
+                        }
+                        view.quality_menu=0;view.menu=0;
+                    }
+                }
+                if(pressed||input.touch_tap)last_draw=0;
+            }else{
             if(pressed&SCE_CTRL_SELECT){view.menu=!view.menu;view.menu_sel=0;last_draw=0;}
             if(view.menu){
-                if(pressed&SCE_CTRL_UP)view.menu_sel=(view.menu_sel+3)%4;
-                if(pressed&SCE_CTRL_DOWN)view.menu_sel=(view.menu_sel+1)%4;
+                if(pressed&SCE_CTRL_UP)view.menu_sel=(view.menu_sel+4)%5;
+                if(pressed&SCE_CTRL_DOWN)view.menu_sel=(view.menu_sel+1)%5;
                 if(input.touch_tap){
                     int hit=0;
-                    for(int i=0;i<4;i++)
-                        if(ui_touch_hit(&input,222,151+i*55,516,49)){
+                    for(int i=0;i<5;i++)
+                        if(ui_touch_hit(&input,222,122+i*65,516,49)){
                             view.menu_sel=i;pressed|=accept;hit=1;break;
                         }
                     if(!hit)view.menu=0;
@@ -1014,8 +1061,16 @@ int player_run(const player_params_t *pp, char *err, int errlen)
                             }
                             break;
                         case 1:view.osd=!view.osd;osd_until=view.osd?now_us+5000000ULL:0;refresh_viewers=view.osd;last_draw=0;view.menu=0;break;
-                        case 2:view.menu=0;break;
-                        case 3:should_exit=1;break;
+                        case 2:
+                            if(pp->variants&&pp->variant_count>0&&pp->variant_requested){
+                                view.quality_menu=1;view.menu=0;
+                                view.quality_sel=pp->variant_current;
+                                if(view.quality_sel<0||view.quality_sel>=pp->variant_count)view.quality_sel=0;
+                                view.quality_top=view.quality_sel>=6?view.quality_sel-5:0;
+                            }
+                            last_draw=0;break;
+                        case 3:view.menu=0;break;
+                        case 4:should_exit=1;break;
                     }
                 }
             }else{
@@ -1035,7 +1090,16 @@ int player_run(const player_params_t *pp, char *err, int errlen)
                     snprintf(view.volume_notice,sizeof(view.volume_notice),"%s: %d%%",vt_opt(VT_O_VOLUME),v);
                     view.notice=view.volume_notice;view.notice_until=now_us+2000000ULL;
                 }
-                if(input.touch_tap){view.osd=!view.osd;osd_until=view.osd?now_us+5000000ULL:0;refresh_viewers=view.osd;last_draw=0;}
+                if(input.touch_tap){
+                    int aw=(pp->chat_on&&*pp->chat_on)?SCREEN_W-CHAT_PANEL_W:SCREEN_W;
+                    if(view.osd&&input.touch_y<64&&input.touch_x>=aw/2&&input.touch_x<aw&&pp->variants&&pp->variant_count>0&&pp->variant_requested){
+                        view.quality_menu=1;view.quality_sel=pp->variant_current;
+                        if(view.quality_sel<0||view.quality_sel>=pp->variant_count)view.quality_sel=0;
+                        view.quality_top=view.quality_sel>=6?view.quality_sel-5:0;
+                    }else{view.osd=!view.osd;osd_until=view.osd?now_us+5000000ULL:0;refresh_viewers=view.osd;}
+                    last_draw=0;
+                }
+            }
             }
         }
         if(should_exit)break;
