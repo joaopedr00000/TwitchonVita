@@ -636,27 +636,26 @@ static void draw_modal_box(int w, int h, int *ox, int *oy)
 
 static void wrap_text(int x, int y, int max_w, unsigned color, float scale, const char *s, int max_lines)
 {
-    char line[256];
-    const char *p = s;
-    for (int ln = 0; ln < max_lines && *p; ln++) {
-        size_t best = 0, i = 0;
-        while (p[i]) {
-            while (p[i] && p[i] != ' ') i++;
-            if (i >= sizeof(line)) break;
-            memcpy(line, p, i);
-            line[i] = 0;
-            if (ui_text_w(scale, line) > max_w && best)
-                break;
-            best = i;
-            if (!p[i]) break;
-            i++;
+    if(!s||max_w<=0)return;
+    char line[256];const char *p=s;
+    for(int ln=0;ln<max_lines&&*p;ln++){
+        while(*p==' ')p++;
+        size_t n=0,best=0,space=0;
+        while(p[n]&&p[n]!='\n'){
+            size_t next=n+1;
+            while(p[next]&&((unsigned char)p[next]&0xC0)==0x80)next++;
+            if(next>=sizeof(line))break;
+            memcpy(line,p,next);line[next]=0;
+            if(ui_text_w(scale,line)>max_w)break;
+            if(p[n]==' ')space=n;
+            best=next;n=next;
         }
-        if (!best) best = strlen(p) < sizeof(line) - 1 ? strlen(p) : sizeof(line) - 1;
-        memcpy(line, p, best);
-        line[best] = 0;
-        ui_text(x, y + ln * (int)(28 * scale), color, scale, line);
-        p += best;
-        while (*p == ' ') p++;
+        if(!best&&*p&&*p!='\n'){best=1;while(p[best]&&((unsigned char)p[best]&0xC0)==0x80)best++;}
+        if(p[best]&&p[best]!='\n'&&space)best=space;
+        if(ln==max_lines-1&&p[best]){ui_text_fit(x,y+ln*(int)(28*scale),max_w,color,scale,p);return;}
+        memcpy(line,p,best);line[best]=0;
+        ui_text_fit(x,y+ln*(int)(28*scale),max_w,color,scale,line);
+        p+=best;if(*p=='\n')p++;
     }
 }
 
@@ -1215,7 +1214,7 @@ static void language_screen(void)
             if(i==sel) ui_round_rect(x+12,y+60+k*row,w-24,row-3,6,C_PURPLE);
             ui_text_fit(x+30,y+90+k*row,w-60,C_WHITE,0.94f,vt_lang_name(i));
         }
-        ui_text(x+24,y+h-13,C_GREY,0.7f,vt_msg("Up/Down  |  X  |  Back"));
+        ui_text_fit(x+24,y+h-13,w-48,C_GREY,0.7f,vt_msg("Up/Down  |  X  |  Back"));
         frame_end();
     }
 }
