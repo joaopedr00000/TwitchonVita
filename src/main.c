@@ -2153,7 +2153,7 @@ static void tv_input(void){
     }
     int n=home_count(tb),pos=home_pos(tb);
     if(n&&(p&(SCE_CTRL_LEFT|SCE_CTRL_RIGHT))){int k=pos<0?0:(pos+(p&SCE_CTRL_RIGHT?1:n-1))%n;tb->sel=home_index(tb,k);}
-    if(p&g_btn_ok){if(tb->need_login)g_side_focus=PROFILE_FOCUS;else open_selected();}
+    if(p&g_btn_ok){if(tb->need_login)tv_activate(4);else open_selected();}
 }
 
 int main(void)
@@ -2200,7 +2200,7 @@ int main(void)
         if(g_tv_layout){tv_input();sceKernelPowerTick(SCE_KERNEL_POWER_TICK_DISABLE_AUTO_SUSPEND);frame_begin();draw_home();frame_end();continue;}
 
         if(ui_touch_hit(&g_in,778,0,182,HEADER_H)){g_side_focus=PROFILE_FOCUS;account_screen();continue;}
-        if(g_side_focus==PROFILE_FOCUS){if(p&g_btn_ok){account_screen();continue;}if(p&SCE_CTRL_DOWN)g_side_focus=-1;else if(p&(SCE_CTRL_LEFT|g_btn_back))g_side_focus=side_active();else {frame_begin();draw_home();frame_end();continue;}}
+        if(g_side_focus==PROFILE_FOCUS){if(p&g_btn_ok){account_screen();continue;}if(p&SCE_CTRL_DOWN)g_side_focus=-1;else if(p&(SCE_CTRL_LEFT|g_btn_back))g_side_focus=side_active();if(!(p&(SCE_CTRL_LTRIGGER|SCE_CTRL_RTRIGGER|SCE_CTRL_SELECT))){frame_begin();draw_home();frame_end();continue;}}
         int profile_cell=(SCREEN_W-24)/(g_tab!=TAB_EXPLORE?6:5);
         if((p&SCE_CTRL_START)||ui_touch_hit(&g_in,12+profile_cell*(g_tab!=TAB_EXPLORE?5:4),FOOTER_Y,profile_cell,SCREEN_H-FOOTER_Y)){
             profile_selected();continue;
@@ -2264,7 +2264,7 @@ int main(void)
             if(p&g_btn_back)g_side_focus=side_active();
             if(g_tab!=TAB_SEARCH&&home_pos(tb)<0&&n)tb->sel=home_index(tb,0);
             if(g_side_focus<0&&(p&g_btn_ok)){
-                if(tb->need_login)account_screen();
+                if(tb->need_login)g_side_focus=PROFILE_FOCUS;
                 else open_selected();
             }
         }
