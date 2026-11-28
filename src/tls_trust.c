@@ -51,7 +51,6 @@ CURLcode vt_tls_configure(CURL *c)
     OPT(CURLOPT_SSL_CTX_FUNCTION,trust_callback);
     OPT(CURLOPT_SSL_SESSIONID_CACHE,0L);
     OPT(CURLOPT_FRESH_CONNECT,1L);
-    OPT(CURLOPT_FORBID_REUSE,1L);
 #undef OPT
     return CURLE_OK;
 }
