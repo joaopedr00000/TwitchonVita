@@ -45,7 +45,7 @@ int _newlib_heap_size_user = 96 * 1024 * 1024;
 #define SETTINGS_FILE DATA_DIR "/settings.txt"
 #define LOG_FILE      DATA_DIR "/log.txt"
 #define LOG_PREV_FILE DATA_DIR "/log_prev.txt"
-#define APP_VERSION   "1.34-smarttv-test8"
+#define APP_VERSION   "1.34-follow-local-test9"
 
 #define MAX_ITEMS 100
 
@@ -202,6 +202,16 @@ static int saved_toggle(const char *login,const char *display,const char *avatar
     if(sceIoRename(SAVED_FILE ".tmp",SAVED_FILE)<0){if(backed)sceIoRename(SAVED_FILE ".bak",SAVED_FILE);sceIoRemove(SAVED_FILE ".tmp");return -1;}
     sceIoRemove(SAVED_FILE ".bak");memcpy(saved_channels,saved_work,(size_t)n*sizeof(saved_work[0]));saved_n=n;
     return at<0?1:0;
+}
+static int saved_ensure(const char *login,const char *display,const char *avatar){
+    if(saved_has(login))return 1; /* idempotent; never toggle a saved channel off */
+    return saved_toggle(login,display,avatar);
+}
+static int account_follow_known(const char *login){
+    tab_t *tb=&g_tabs[TAB_FOLLOWED];
+    if(!g_logged||!login||!*login||tb->state!=LS_READY||g_follow_offline==2||tb->job.kind==TW_LIST_SAVED||strcmp(tb->job.oauth,g_auth.access))return 0;
+    for(int i=0;i<tb->count;i++)if(!strcmp(tb->items[i].login,login))return 1;
+    return 0; /* absence is not proof: live-only/limited list */
 }
 static const char *following_mode(void){return g_follow_offline==2?saved_title():g_follow_offline==1?(vt_lang_current()==2?"Todos os seguidos":"All follows"):vt_tr(VT_I_LIVE);}
 static void settings_load(void)
@@ -988,7 +998,7 @@ static void play_selected(void)
     pp.url = play_list[sel]->url;
     pp.channel = display && display[0] ? display : login;
     pp.title = clean_title;
-    pp.saved_has=saved_has;pp.saved_toggle=saved_toggle;pp.saved_label=saved_label;
+    pp.saved_has=saved_has;pp.saved_toggle=saved_toggle;pp.saved_label=saved_label;pp.saved_ensure=saved_ensure;pp.account_follow_known=account_follow_known(login);
     pp.profile_avatar=channel_avatar;pp.profile_game=channel_game;
     pp.profile_label=profile_label(0);pp.follow_label=profile_label(1);
     pp.quality = play_list[sel]->name;
@@ -1070,7 +1080,7 @@ static void play_selected(void)
         modal_message(vt_msg("Reproduccion detenida"), err);
     /* viewer counts / thumbnails are stale after watching */
     tab_load(g_tab);
-
+    if(g_tab!=TAB_FOLLOWED&&g_follow_offline==2)tab_load(TAB_FOLLOWED);
 
 
 
@@ -1610,19 +1620,20 @@ static void profile_screen(const twitch_stream_t *s)
     if(twitch_channel_url(s->login,url,sizeof(url))<0)return;
     profile_job_t job={0};snprintf(job.login,sizeof(job.login),"%s",s->login);
     task_t task={0},follow_task={0};
-    twitch_follow_job_t follow={0};follow.state=-1;follow.desired=-1;
+    twitch_follow_job_t follow={0};follow.state=-1;
     snprintf(follow.login,sizeof(follow.login),"%s",s->login);
     snprintf(follow.oauth,sizeof(follow.oauth),"%s",g_logged?g_auth.access:"");
     snprintf(follow.user_id,sizeof(follow.user_id),"%s",g_logged?g_auth.user_id:"");
     int follow_busy=follow.oauth[0]&&task_start(&follow_task,twitch_follow_run,&follow)==0;
-    int follow_state=-1,follow_status=follow_busy?2:follow.oauth[0]?4:1;
+    int known=account_follow_known(s->login);
+    int follow_state=known?1:-1,follow_status=follow_busy?2:known?TW_FOLLOW_ALREADY:follow.oauth[0]?4:1;
     int followers=-1;char created[32]="",started[32]="",avatar[192]="";
     int loading=task_start(&task,profile_run,&job)==0,selected=s->live?0:1,armed=0;
     const int x=92,y=32,w=776,h=480,bx=x+24,by=y+302,bw=w-48,rh=39;
     for(;;){
         ui_input_poll(&g_in);
         if(loading&&task_done(&task)){task_wait(&task);loading=0;}
-        if(follow_busy&&task_done(&follow_task)){follow_busy=0;follow_state=follow.state;follow_status=follow.status;if(follow.desired<0){followers=follow.followers;snprintf(created,sizeof(created),"%s",follow.created_at);snprintf(started,sizeof(started),"%s",follow.started_at);snprintf(avatar,sizeof(avatar),"%s",follow.avatar);}}
+        if(follow_busy&&task_done(&follow_task)){follow_busy=0;follow_state=follow.state<0&&known?1:follow.state;follow_status=follow_state==1?TW_FOLLOW_ALREADY:follow.status;followers=follow.followers;snprintf(created,sizeof(created),"%s",follow.created_at);snprintf(started,sizeof(started),"%s",follow.started_at);snprintf(avatar,sizeof(avatar),"%s",follow.avatar);}
         if(!(g_in.held&(g_btn_ok|g_btn_back|SCE_CTRL_START))&&!g_in.touch_down)armed=1;
         if(armed&&(g_in.pressed&(g_btn_back|SCE_CTRL_START)))break;
         int choose=armed&&(g_in.pressed&g_btn_ok);
@@ -1635,14 +1646,10 @@ static void profile_screen(const twitch_stream_t *s)
                 play_channel(s->login,s->display,s->title,s->viewers);return;
             }
             if(selected==3)break;
-            if(selected==2){int rc=saved_toggle(s->login,s->display,avatar[0]?avatar:s->avatar);if(rc<0)toast(vt_lang_current()==2?"Erro ao salvar no Vita":"Could not save on Vita");else toast(rc?saved_title():saved_label(1));armed=0;}
-            if(selected==1){
-                if(!follow.oauth[0])follow_status=1;
-                else if(!follow_busy&&follow_state!=2){
-                    follow.desired=follow_state<0?-1:1-follow_state;
-                    follow_busy=task_start(&follow_task,twitch_follow_run,&follow)==0;
-                    follow_status=follow_busy?2:4;
-                }
+            if(selected==2&&!follow_busy){int rc=saved_toggle(s->login,s->display,avatar[0]?avatar:s->avatar);follow_status=rc<0?TW_FOLLOW_LOCAL_ERROR:rc?TW_FOLLOW_LOCAL_SAVED:TW_FOLLOW_LOCAL_REMOVED;armed=0;}
+            if(selected==1&&!follow_busy){
+                if(follow_state==1)follow_status=TW_FOLLOW_ALREADY;
+                else {int rc=saved_ensure(s->login,s->display,avatar[0]?avatar:s->avatar);follow_status=rc>0?TW_FOLLOW_LOCAL_SAVED:TW_FOLLOW_LOCAL_ERROR;}
                 armed=0;
             }
         }
@@ -1662,8 +1669,8 @@ static void profile_screen(const twitch_stream_t *s)
         else if(job.bio[0])wrap_text(x+24,y+187,w-48,C_GREY,.82f,job.bio,3);
         if(followers>=0||created[0]||started[0]){snprintf(line,sizeof(line),"%s %d | %s %.10s | %s %.16s UTC",vt_lang_current()==2?"Seguidores":"Followers",followers,vt_lang_current()==2?"Desde":"Since",created,vt_lang_current()==2?"Live desde":"Live since",started);ui_text_fit(x+24,y+251,w-48,C_GREY,.75f,line);}
         ui_text_fit(x+24,y+270,w-48,C_GREY,.75f,twitch_follow_notice(follow_status));
-        ui_text_fit(x+24,y+294,w-48,C_GREY,.8f,url);
-        const char *labels[]={vt_tr(VT_I_PLAY),follow_busy?vt_tr(VT_I_LOADING):twitch_follow_label(follow_state),saved_label(saved_has(s->login)),vt_tr(VT_I_BACK)};
+        ui_text_fit(x+24,y+294,w-48,C_GREY,.8f,twitch_follow_notice_detail(follow_status)[0]?twitch_follow_notice_detail(follow_status):url);
+        const char *labels[]={vt_tr(VT_I_PLAY),follow_busy?vt_tr(VT_I_LOADING):twitch_follow_label(follow_state,saved_has(s->login)),saved_label(saved_has(s->login)),vt_tr(VT_I_BACK)};
         for(int i=0;i<4;i++){
             int yy=by+i*rh;ui_round_rect(bx,yy,bw,rh-3,5,selected==i?CLASSIC_PURPLE:CLASSIC_TILE);
             ui_text_fit(bx+14,yy+26,bw-28,i==0&&!s->live&&!saved_has(s->login)?C_DIM:C_WHITE,.93f,labels[i]);

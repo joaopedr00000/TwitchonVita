@@ -11,6 +11,8 @@ typedef struct {
     const char *profile_avatar,*profile_game,*profile_label,*follow_label;
     int (*saved_has)(const char *login);
     int (*saved_toggle)(const char *login,const char *display,const char *avatar);
+    int (*saved_ensure)(const char *login,const char *display,const char *avatar);
+    int account_follow_known;
     const char *(*saved_label)(int saved);
     const char *quality;    /* label shown in the OSD */
     int width, height;      /* from the master playlist (0 = unknown) */

@@ -52,13 +52,16 @@ int twitch_parse_channel_bio(const char *json, char *bio, size_t cap);
 int twitch_parse_follow_state(const char *json,char *id,size_t cap);
 int twitch_parse_helix_follow(const char *json,const char *target);
 int twitch_parse_follows_all(const char *json,twitch_stream_t *out,int max,int *n,char *cursor,size_t cursor_cap,int *has_next,char *err,size_t errlen);
-const char *twitch_follow_label(int state);
+const char *twitch_follow_label(int state,int saved);
+const char *twitch_follow_notice_detail(int status);
+/* Local fallback UI states: never imply an account mutation. */
+enum { TW_FOLLOW_LOCAL_SAVED=11, TW_FOLLOW_LOCAL_ERROR=12, TW_FOLLOW_ALREADY=13, TW_FOLLOW_LOCAL_REMOVED=14 };
 const char *twitch_follow_notice(int status);
 typedef struct {
     char login[32],oauth[128],id[32],user_id[32];
     int status; /* diagnostic code, never credentials */
     int followers; char started_at[32],created_at[32],avatar[192];
-    int state,desired; /* desired=-1 reads; 0/1 explicit user action */
+    int state; /* read-only account relationship */
 } twitch_follow_job_t;
 
 /* Extracts value/signature from the PlaybackAccessToken response. 0 on success. */

@@ -30,6 +30,9 @@ jobs:
           gcc -DVT_NO_NET -std=gnu11 -Wall -Wextra -Isrc tests/channel_profile_test.c src/twitch.c src/json.c src/log.c src/i18n.c -o /tmp/vt-profile-test
           /tmp/vt-profile-test
           ! grep -q 'sceAppMgrLaunchAppByUri' src/main.c src/player.c
+          ! grep -E 'followUser\(|unfollowUser\(' src/twitch.c
+          grep -q 'saved_ensure' src/main.c
+          grep -q 'saved_ensure' src/player.c
           gcc -std=gnu11 -Wall -Wextra -Werror -pthread -Isrc tests/pktqueue_test.c src/pktqueue.c -o /tmp/vt-queue-test
           /tmp/vt-queue-test
       - name: IRC message sanitization and UTF-8 security checks
@@ -115,13 +118,13 @@ jobs:
             assert b'Twitch\x00' in sfo
           print('PASS experimental VitaSDK VPK, version 01.34, title ID and trusted IRC CA bundle')
           PY
-          cp build-ci/VitaTwitch.vpk Twitch-1.34-SmartTV8.vpk
-          sha256sum Twitch-1.34-SmartTV8.vpk > SHA256SUMS.txt
+          cp build-ci/VitaTwitch.vpk Twitch-1.34-LocalFollow9.vpk
+          sha256sum Twitch-1.34-LocalFollow9.vpk > SHA256SUMS.txt
       - uses: actions/upload-artifact@v4
         with:
-          name: Twitch-1.34-SmartTV8-EXPERIMENTAL
+          name: Twitch-1.34-LocalFollow9-EXPERIMENTAL
           path: |
-            Twitch-1.34-SmartTV8.vpk
+            Twitch-1.34-LocalFollow9.vpk
             SHA256SUMS.txt
             ca-bundle.sha256
           retention-days: 14

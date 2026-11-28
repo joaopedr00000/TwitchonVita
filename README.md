@@ -64,3 +64,7 @@ Category cover browsing, local category favorites, alternate TV grid, offline fo
 
 ### Smart TV layout and device favorites
 The alternate TV interface now has top navigation, a featured preview and horizontal shelves. Save on Vita is a separate persistent local bookmark, not a Twitch account follow. The Following view cycles live account follows, all account follows and local saved channels. Twitch account mutations remain experimental and may be refused; the app does not report a successful account follow unless independently confirmed.
+
+
+### Local Follow 9
+Account follows are read-only. The profile shows existing Twitch follows and offers to save new channels on the Vita, with an explicit notice that Twitch account following is unavailable. Local save is idempotent and removal affects the local list only. No follow or unfollow mutations are sent.

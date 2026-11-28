@@ -34,5 +34,10 @@ int main(void){
     assert(!strcmp(g[0].slug,"just-chatting")&&!strcmp(g[0].art,"https://example.com/cover.jpg"));
     twitch_category_cover("Just Chatting",g[0].art,sizeof(g[0].art));
     assert(!strcmp(g[0].art,"https://static-cdn.jtvnw.net/ttv-boxart/Just%20Chatting-144x192.jpg"));
+    assert(!strcmp(twitch_follow_label(1,0),"Following on Twitch"));
+    assert(!strcmp(twitch_follow_label(1,1),"Following on Twitch"));
+    assert(!strcmp(twitch_follow_label(0,1),"Saved on Vita"));
+    assert(!strcmp(twitch_follow_label(-1,0),"Follow"));
+    assert(strstr(twitch_follow_notice_detail(TW_FOLLOW_LOCAL_SAVED),"saved on Vita"));
     return 0;
 }

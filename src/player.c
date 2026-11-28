@@ -912,8 +912,8 @@ static void draw_view(const vslot_t *frame, view_t *vw)
             }
         }
         ui_text_fit(x+24,y+270,w-48,C_GREY,.75f,twitch_follow_notice(vw->follow_status));
-        ui_text_fit(x+24,y+294,w-48,C_GREY,.8f,vw->profile_url);
-        const char *labels[]={vw->follow_busy?vt_tr(VT_I_LOADING):twitch_follow_label(vw->follow_state),vw->pp->saved_label?vw->pp->saved_label(vw->pp->saved_has&&vw->pp->saved_has(vw->pp->login)):"Save on Vita",vt_tr(VT_I_BACK)};
+        ui_text_fit(x+24,y+294,w-48,C_GREY,.8f,twitch_follow_notice_detail(vw->follow_status)[0]?twitch_follow_notice_detail(vw->follow_status):vw->profile_url);
+        const char *labels[]={vw->follow_busy?vt_tr(VT_I_LOADING):twitch_follow_label(vw->follow_state,vw->pp->saved_has&&vw->pp->saved_has(vw->pp->login)),vw->pp->saved_label?vw->pp->saved_label(vw->pp->saved_has&&vw->pp->saved_has(vw->pp->login)):"Save on Vita",vt_tr(VT_I_BACK)};
         for(int i=0;i<3;i++){
             int yy=y+310+i*44;ui_round_rect(x+24,yy,w-48,41,5,i==vw->profile_sel?C_PURPLE:C_PANEL);
             ui_text_fit(x+38,yy+26,w-76,C_WHITE,.93f,labels[i]);
@@ -1071,7 +1071,7 @@ int player_run(const player_params_t *pp, char *err, int errlen)
     int should_exit=0;
     task_t viewer_task={0};viewer_job_t viewer_job={0};
     task_t profile_task={0},follow_task={0};live_profile_job_t profile_job={0};
-    twitch_follow_job_t follow_job={0};follow_job.state=-1;follow_job.desired=-1;view.follow_state=-1;
+    twitch_follow_job_t follow_job={0};follow_job.state=-1;view.follow_state=pp->account_follow_known?1:-1;
     if(pp->login)snprintf(follow_job.login,sizeof(follow_job.login),"%s",pp->login);
     if(pp->chat_oauth)snprintf(follow_job.oauth,sizeof(follow_job.oauth),"%s",pp->chat_oauth);
     if(pp->chat_sender_id)snprintf(follow_job.user_id,sizeof(follow_job.user_id),"%s",pp->chat_sender_id);
@@ -1100,7 +1100,7 @@ int player_run(const player_params_t *pp, char *err, int errlen)
         unsigned pressed=input.pressed;
         int refresh_viewers=0,write_chat=0,open_profile=0;
         if(view.follow_busy&&task_done(&follow_task)){
-            view.follow_busy=0;view.follow_state=follow_job.state;view.follow_status=follow_job.status;last_draw=0;
+            view.follow_busy=0;view.follow_state=follow_job.state<0&&pp->account_follow_known?1:follow_job.state;view.follow_status=view.follow_state==1?TW_FOLLOW_ALREADY:follow_job.status;last_draw=0;
         }
         if(view.profile_loading&&task_done(&profile_task)){
             view.profile_loading=0;view.profile_fetched=1;
@@ -1132,12 +1132,10 @@ int player_run(const player_params_t *pp, char *err, int errlen)
                 for(int i=0;i<3;i++)if(ui_touch_hit(&input,116,342+i*44,728,41)){view.profile_sel=i;choose=1;break;}
                 if(choose){
                     if(view.profile_sel==2)view.profile_open=0;
-                    else if(view.profile_sel==1&&pp->saved_toggle){int rc=pp->saved_toggle(pp->login,pp->channel,pp->profile_avatar);view.notice=rc<0?"Save failed":rc?"Saved on Vita (local)":"Removed from Vita";view.notice_until=now_us+3000000ULL;}
-                    else if(!follow_job.oauth[0])view.follow_status=1;
-                    else if(!view.follow_busy&&view.follow_state!=2){
-                        follow_job.desired=view.follow_state<0?-1:1-view.follow_state;
-                        view.follow_busy=task_start(&follow_task,twitch_follow_run,&follow_job)==0;
-                        view.follow_status=view.follow_busy?2:4;
+                    else if(!view.follow_busy&&view.profile_sel==1&&pp->saved_toggle){int rc=pp->saved_toggle(pp->login,pp->channel,follow_job.avatar[0]?follow_job.avatar:pp->profile_avatar);view.follow_status=rc<0?TW_FOLLOW_LOCAL_ERROR:rc?TW_FOLLOW_LOCAL_SAVED:TW_FOLLOW_LOCAL_REMOVED;}
+                    else if(!view.follow_busy&&view.profile_sel==0){
+                        if(view.follow_state==1)view.follow_status=TW_FOLLOW_ALREADY;
+                        else {int rc=pp->saved_ensure?pp->saved_ensure(pp->login,pp->channel,follow_job.avatar[0]?follow_job.avatar:pp->profile_avatar):-1;view.follow_status=rc>0?TW_FOLLOW_LOCAL_SAVED:TW_FOLLOW_LOCAL_ERROR;}
                     }
                 }
             }
@@ -1242,7 +1240,7 @@ int player_run(const player_params_t *pp, char *err, int errlen)
         if(should_exit)break;
         if(open_profile&&twitch_channel_url(pp->login,view.profile_url,sizeof(view.profile_url))==0){
             view.profile_open=1;view.profile_sel=0;view.menu=0;view.quality_menu=0;last_draw=0;
-            if(follow_job.oauth[0]&&!view.follow_busy){follow_job.desired=-1;view.follow_busy=task_start(&follow_task,twitch_follow_run,&follow_job)==0;view.follow_status=view.follow_busy?2:4;}
+            if(follow_job.oauth[0]&&!view.follow_busy){view.follow_busy=task_start(&follow_task,twitch_follow_run,&follow_job)==0;view.follow_status=view.follow_busy?2:4;}
             if(!view.profile_loading&&!view.profile_fetched&&task_start(&profile_task,live_profile_fetch,&profile_job)==0)view.profile_loading=1;
             LOGI("profile: opened in player @%s",pp->login);
         }

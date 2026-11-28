@@ -106,31 +106,41 @@ int twitch_parse_helix_follow(const char *json,const char *target)
     }
     json_free(root);return state;
 }
-const char *twitch_follow_label(int state)
+const char *twitch_follow_label(int state,int saved)
 {
     int l=vt_lang_current();
-    if(state==1)return l==2?"Deixar de seguir":l==1?"Dejar de seguir":"Unfollow";
-    if(state==0)return l==2||l==1?"Seguir":"Follow";
-    if(state==2)return l==2?"Indisponível":l==1?"No disponible":"Unavailable";
-    return l==2?"Consultar Follow":l==1?"Consultar seguimiento":"Check follow status";
+    if(state==1)return l==2?"Seguindo na Twitch":l==1?"Siguiendo en Twitch":"Following on Twitch";
+    if(saved)return l==2?"Salvo no Vita":l==1?"Guardado en Vita":"Saved on Vita";
+    return l==2||l==1?"Seguir":"Follow";
 }
 const char *twitch_follow_notice(int status)
 {
     int l=vt_lang_current();
     switch(status){
-    case 1:return l==2?"Entre na sua conta para seguir.":l==1?"Inicia sesión para seguir.":"Sign in to follow.";
-    case 2:return l==2?"Confirmando com a Twitch...":l==1?"Confirmando con Twitch...":"Checking with Twitch...";
-    case 3:return l==2?"Estado confirmado pela Twitch.":l==1?"Estado confirmado por Twitch.":"Confirmed by Twitch.";
-    case 4:return l==2?"A Twitch não confirmou a ação. Tente consultar novamente.":l==1?"Twitch no confirmó la acción.":"Twitch did not confirm. Check again.";
-    case 5:return l==2?"Twitch exige verificação de integridade.":l==1?"Twitch exige verificación de integridad.":"Twitch requires an integrity check.";
-    case 6:return l==2?"Sessão ou permissão recusada pela Twitch.":l==1?"Sesión o permiso rechazado.":"Twitch rejected session or permission.";
+    case 1:return l==2?"Entre na conta para consultar os canais seguidos.":l==1?"Inicia sesión para consultar tus canales.":"Sign in to read your account follows.";
+    case 2:return l==2?"Consultando a Twitch...":l==1?"Consultando Twitch...":"Checking Twitch...";
+    case 3:return l==2?"Estado da conta consultado.":l==1?"Estado de la cuenta consultado.":"Account status checked.";
+    case 5:return l==2?"Não foi possível consultar a integridade da sessão.":l==1?"No se pudo comprobar la sesión.":"Could not verify session integrity.";
+    case 6:return l==2?"Sessão ou permissão de leitura recusada.":l==1?"Sesión o permiso de lectura rechazado.":"Session or read permission rejected.";
     case 7:return l==2?"Falha na conexão segura (TLS).":l==1?"Error de conexión segura (TLS).":"Secure connection failed (TLS).";
     case 8:return l==2?"Falha de rede ao consultar Twitch.":l==1?"Error de red al consultar Twitch.":"Twitch network request failed.";
     case 9:return l==2?"Resposta da API incompatível.":l==1?"Respuesta de API incompatible.":"Unsupported API response.";
-    case 10:return l==2?"Follow da conta recusado. Use Salvar no Vita para acesso local.":l==1?"Twitch no aplicó el seguimiento.":"Twitch rejected or did not apply follow.";
-    default:return l==2?"Follow experimental na conta Twitch.":l==1?"Seguimiento experimental en Twitch.":"Experimental Twitch account follow.";
+    case TW_FOLLOW_LOCAL_SAVED:return l==2?"Ainda não é possível seguir novos canais na Twitch pelo Vita.":l==1?"Aún no se pueden seguir canales en Twitch desde Vita.":"Following new channels on Twitch from Vita is not yet possible.";
+    case TW_FOLLOW_LOCAL_ERROR:return l==2?"Não foi possível salvar o canal no Vita.":l==1?"No se pudo guardar el canal en Vita.":"Could not save the channel on Vita.";
+    case TW_FOLLOW_ALREADY:return l==2?"Você já segue este canal na sua conta Twitch.":l==1?"Ya sigues este canal en tu cuenta Twitch.":"You already follow this channel on Twitch.";
+    case TW_FOLLOW_LOCAL_REMOVED:return l==2?"Canal removido dos favoritos locais.":l==1?"Canal eliminado de favoritos locales.":"Channel removed from local favorites.";
+    default:return l==2?"Não foi possível confirmar o estado da conta.":l==1?"No se pudo confirmar el estado de la cuenta.":"Account follow status could not be confirmed.";
     }
 }
+const char *twitch_follow_notice_detail(int status)
+{
+    int l=vt_lang_current();
+    if(status==TW_FOLLOW_LOCAL_SAVED)return l==2?"Mesmo assim, o canal foi salvo no Vita.":l==1?"De todos modos, el canal se guardó en Vita.":"The channel has still been saved on Vita.";
+    if(status==TW_FOLLOW_LOCAL_ERROR)return l==2?"Sua conta Twitch não foi alterada.":l==1?"Tu cuenta Twitch no se modificó.":"Your Twitch account was not changed.";
+    if(status==TW_FOLLOW_ALREADY)return l==2?"Nenhuma alteração na sua conta.":l==1?"Sin cambios en tu cuenta.":"No change to your account.";
+    return "";
+}
+
 static int build_gql_profile(const char *login,const char *profile,char *out,size_t cap)
 {
     /* Inline query (no persisted-query hash) so it keeps working when hashes rotate. */
@@ -614,26 +624,12 @@ static void follow_metadata(twitch_follow_job_t *j,volatile int *abort_flag)
 }
 int twitch_follow_run(void *arg,volatile int *abort_flag)
 {
-    twitch_follow_job_t *j=arg;j->status=4;
+    twitch_follow_job_t *j=arg;j->status=4;j->followers=-1;
+    /* Only read account relationship and public metadata. No follow/unfollow mutation. */
     if(follow_read(j,abort_flag)<0)return -1;
-    if(j->desired<0||j->state==j->desired){if(j->desired<0)follow_metadata(j,abort_flag);j->status=3;return 0;}
-    if(j->state==2||j->desired>1||(abort_flag&&*abort_flag)){j->status=10;return -1;}
-    char body[512];
-    if(j->desired==1)
-        snprintf(body,sizeof(body),"{\"query\":\"mutation { followUser(input: {targetID: \\\"%s\\\", disableNotifications: true}) { follow { __typename } } }\"}",j->id);
-    else
-        snprintf(body,sizeof(body),"{\"query\":\"mutation { unfollowUser(input: {targetID: \\\"%s\\\"}) { follow { __typename } } }\"}",j->id);
-    buf_t resp={0};
-    int rc=follow_request("https://gql.twitch.tv/gql",body,j,0,&resp,abort_flag);
-    int failure=rc<0?j->status:10;
-    buf_free(&resp);
-    /* A single mutation, followed by independent read-only verification.
-       If the state is already correct, trust the verified account state. */
-    int verified=follow_read(j,abort_flag);
-    if(verified==0&&j->state==j->desired){j->status=3;return 0;}
-    j->status=failure;
-    LOGW("follow: requested=%d verified=%d category=%d",j->desired,j->state,j->status);
-    return -1;
+    follow_metadata(j,abort_flag);
+    j->status=3;
+    return 0;
 }
 
 int twitch_fetch_channel_bio(const char *login,char *bio,size_t cap,volatile int *abort_flag)
