@@ -839,7 +839,7 @@ static void draw_view(const vslot_t *frame, view_t *vw)
         if(duration>0){float fraction=(float)pos/duration;if(fraction>1)fraction=1;if(fraction<0)fraction=0;vita2d_draw_rectangle(24,SCREEN_H-76,(AW-48)*fraction,6,C_PURPLE);}
         snprintf(line,sizeof(line),"%02d:%02d:%02d / %02d:%02d:%02d",pos/3600,pos/60%60,pos%60,duration/3600,duration/60%60,duration%60);
         ui_text_fit(24,SCREEN_H-43,AW-48,C_WHITE,.94f,line);
-        ui_text_fit(24,SCREEN_H-13,AW-48,C_WHITE,.9f,vt_lang_current()==2?(vw->paused?"Retomar | L/R 30s | SELECT Qualidade | Voltar":"Pausa | L/R 30s | SELECT Qualidade | Voltar"):(vw->paused?"Resume | L/R 30s | SELECT Quality | Back":"Pause | L/R 30s | SELECT Quality | Back"));
+        ui_text_fit(24,SCREEN_H-13,AW-48,C_WHITE,.9f,vt_lang_current()==2?(vw->paused?"Retomar | L/R 30s | SELECT Qualidade | Quadrado Clipe":"Pausa | L/R 30s | SELECT Qualidade | Quadrado Clipe"):(vw->paused?"Resume | L/R 30s | SELECT Quality | Square Clip":"Pause | L/R 30s | SELECT Quality | Square Clip"));
     }else if(vw->osd){
         char line[160];
         vita2d_draw_rectangle(0, 0, AW, 64, COLOR_OSD_BG);
@@ -870,11 +870,12 @@ static void draw_view(const vslot_t *frame, view_t *vw)
         int vw_width=ui_text_w(0.92f,caption)+20;if(vw_width>AW/2)vw_width=AW/2;
         ui_text_fit(AW-vw_width,SCREEN_H-12,vw_width-12,C_WHITE,0.92f,caption);
         if(vw->viewers_busy)ui_spinner(AW-vw_width-8,SCREEN_H-19,5,C_PURPLE);
-        int cell=(AW-vw_width-30)/4;
+        int cell=(AW-vw_width-30)/5;
         ui_hint_bounded(10,SCREEN_H-12,cell,vw->pp->btn_back==SCE_CTRL_CIRCLE?"O":"X",vt_tr(VT_I_EXIT));
         ui_hint_bounded(10+cell,SCREEN_H-12,cell,"△",vt_tr(VT_I_SHOW_INFO));
         ui_hint_bounded(10+2*cell,SCREEN_H-12,cell,"□",vt_tr(VT_I_CHAT));
         ui_hint_bounded(10+3*cell,SCREEN_H-12,cell,"START",vw->pp->profile_label?vw->pp->profile_label:"Profile");
+        ui_hint_bounded(10+4*cell,SCREEN_H-12,cell,"L",vt_lang_current()==2?"Clipe":"Clip");
     }
     if(vw->pp->diagnostics && !vw->menu && !vw->quality_menu && !vw->profile_open){
         char a[160],b[160];

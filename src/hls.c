@@ -174,6 +174,7 @@ static void *hls_thread(void *argp)
                     snprintf(h->map_loaded, sizeof(h->map_loaded), "%s", media.map_url[s->map]);
                 } else if (h->running) {
                     LOGE("hls: no se pudo leer la cabecera fMP4 (HTTP %ld, %u bytes)", status, (unsigned)seg.size);
+                    if(h->recorded){snprintf(h->error,sizeof(h->error),"Recording init segment unavailable");goto done;}
                     continue;
                 }
             }
@@ -205,6 +206,7 @@ static void *hls_thread(void *argp)
                 if (r == -2) {
                     if (!h->segments_done)
                         LOGE("hls: segmento fMP4 sin cabecera (EXT-X-MAP)");
+                    if(h->recorded){snprintf(h->error,sizeof(h->error),"Unsupported recording media");goto done;}
                     continue;
                 }
                 if (r < 0)

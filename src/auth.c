@@ -144,7 +144,7 @@ int auth_device_start(auth_device_t *d, char *err, size_t errlen, volatile int *
     buf_t resp = {0};
     long status = 0;
     int ret;
-    char form[256];
+    char form[512];
     snprintf(form, sizeof(form), "client_id=%s&scopes=user%%3Aread%%3Afollows%%20chat%%3Aread%%20chat%%3Aedit%%20user%%3Awrite%%3Achat%%20clips%%3Aedit%%20channel%%3Amanage%%3Aclips%%20editor%%3Amanage%%3Aclips",
              TWITCH_CLIENT_ID);
     if (post_form("https://id.twitch.tv/oauth2/device", form, &resp, &status, abort_flag) < 0) {
@@ -163,7 +163,7 @@ int auth_device_poll(const auth_device_t *d, auth_t *a, char *err, size_t errlen
     buf_t resp = {0};
     long status = 0;
     int ret;
-    char form[384];
+    char form[768];
     snprintf(form, sizeof(form),
              "client_id=%s&scopes=user%%3Aread%%3Afollows%%20chat%%3Aread%%20chat%%3Aedit%%20user%%3Awrite%%3Achat%%20clips%%3Aedit%%20channel%%3Amanage%%3Aclips%%20editor%%3Amanage%%3Aclips"
              "&device_code=%s&grant_type=urn%%3Aietf%%3Aparams%%3Aoauth%%3Agrant-type%%3Adevice_code",
@@ -205,7 +205,7 @@ static int refresh(auth_t *a, char *err, size_t errlen, volatile int *abort_flag
 {
     buf_t resp = {0};
     long status = 0;
-    char form[384];
+    char form[768];
     int ret = -1;
     CURL *c = http_new();
     char *rt;

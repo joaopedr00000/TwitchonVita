@@ -68,3 +68,11 @@ The alternate TV interface now has top navigation, a featured preview and horizo
 
 ### Local Follow 9
 Account follows are read-only. The profile shows existing Twitch follows and offers to save new channels on the Vita, with an explicit notice that Twitch account following is unavailable. Local save is idempotent and removal affects the local list only. No follow or unfollow mutations are sent.
+
+
+### Experimental 1.34 Recordings Test 11
+
+- Read-only Twitch video catalog (archives, highlights, uploads and clips), plus local watch-later and resume metadata (64 entries).
+- Separate recorded HLS playback mode, pause, seek by segment, quality restart at current position, and small RAM-only packet queues. No media files are saved to disk. Completed unencrypted HLS playlists only; ordinary MP4 clips are listed but are not playable in this build.
+- Clip creation via official Helix endpoints, using the existing account after reauthorization for the additional scopes. L in live playback opens a duration/confirmation dialog and reconnects afterward; Square in VOD playback opens the clip dialog and resumes afterward. Clip requests are not retried automatically; success is shown only after Get Clips confirms the ID. VOD creation requires broadcaster/editor permission. No clip is created automatically.
+- Experimental only; hardware validation and API compatibility are not yet established.

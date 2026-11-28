@@ -915,7 +915,7 @@ static int media_duration(const char *s){
     int total=0;
     while(s&&*s){char *end;long n=strtol(s,&end,10);if(end==s||n<0||n>86400)return 0;
         int mul=*end=='h'?3600:*end=='m'?60:*end=='s'?1:0;if(!mul)return 0;
-        if(n*mul>604800-total)return 0;total+=(int)(n*mul);s=end+1;
+        if(n> (604800-total)/mul)return 0;total+=(int)(n*mul);s=end+1;
     }return total;
 }
 static int clip_id_ok(const char *s){return s&&*s&&strlen(s)<80&&strspn(s,"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")==strlen(s);}

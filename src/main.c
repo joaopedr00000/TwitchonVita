@@ -1009,6 +1009,7 @@ static void play_channel(const char *login,const char *display,const char *title
     LOGI("quality flow: fetching %s",play_login);
 }
 
+static void clip_dialog(const char *login,const twitch_media_t *v,int pos);
 static void play_selected(void)
 {
     static char err[256];
@@ -1077,6 +1078,7 @@ static void play_selected(void)
     LOGI("quality flow: player returned %d",r);
     scePowerSetArmClockFrequency(333);
     settings_save();
+    if(r==PLAYER_CREATE_CLIP){clip_dialog(login,NULL,0);r=PLAYER_RECONNECT;retries=0;}
     if(r==PLAYER_CHANGE_QUALITY&&requested>=0&&requested<play_count&&requested!=sel){
         rollback=sel;sel=requested;manual=1;retries=0;reductions=0;ad_switched=0;ad_backup[0]=0;
         snprintf(g_pref_quality,sizeof(g_pref_quality),"%s",play_list[sel]->name);
@@ -1743,7 +1745,9 @@ static void recorded_play(const twitch_media_t *v){
         pp.recorded=1;pp.start_seconds=pos;pp.duration_seconds=v->seconds;pp.position_seconds=&pos;pp.seek_requested=&target;
         pp.url=q->url;pp.channel=v->channel;pp.title=v->title;pp.quality=q->name;pp.width=q->width;pp.height=q->height;pp.fps=q->fps;
         pp.font=ui_font;pp.btn_back=g_btn_back;pp.profile=g_profile;pp.volume=&g_volume;pp.variants=variants;pp.variant_count=n;pp.variant_current=sel;pp.variant_requested=&requested;
+        scePowerSetArmClockFrequency(vt_profile_clock(g_profile,pp.height,pp.fps));
         int rc=player_run(&pp,err,sizeof(err));
+        scePowerSetArmClockFrequency(333);
         if(rc==PLAYER_RECORDING_END)pos=0;
         if(rc==PLAYER_SEEK)pos=target;
         if(media_remember(v,pos,0)<0)toast("Could not save playback position");
