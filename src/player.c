@@ -604,8 +604,9 @@ static void *vdec_thread(void *argp)
                 vp->st_multi++;
             vp->st_pics += nout;
             if (nout > 0 && vp->total_pics == 0)
-                LOGI("video: primera imagen decodificada %dx%d", (int)pic[0].frame.horizontalSize,
-                     (int)pic[0].frame.verticalSize);
+                LOGI("video: primera imagen decodificada %dx%d; HLS %dx%d; texture %dx%d",
+                     (int)pic[0].frame.horizontalSize,(int)pic[0].frame.verticalSize,
+                     vp->pp->width,vp->pp->height,v->w,v->h);
             vp->total_pics += nout;
         }
 
@@ -670,6 +671,8 @@ static int vpipe_start(vpipe_t *vp, vdec_t *v, const player_params_t *pp, char *
         }
         LOGI("startup: clear texture %d stride=%u", i+1, stride);
         memset(data, 0, (size_t)stride * v->h);
+        if(i==0)LOGI("video: initial texture filters min=%d mag=%d",(int)vita2d_texture_get_min_filter(t),(int)vita2d_texture_get_mag_filter(t));
+        vita2d_texture_set_filters(t,SCE_GXM_TEXTURE_FILTER_LINEAR,SCE_GXM_TEXTURE_FILTER_LINEAR);
         LOGI("startup: texture %d ready", i+1);
         vp->slot[vp->nslot].tex = t;
         vp->slot[vp->nslot].state = SLOT_FREE;
@@ -758,6 +761,7 @@ typedef struct {
     int menu;             /* in-player extras opened by SELECT */
     int menu_sel;
     int quality_menu,quality_sel,quality_top;
+    int decoded_w,decoded_h,display_w,display_h;
     const char *notice;   /* transient send/authentication feedback */
     uint64_t notice_until;
 } view_t;
@@ -775,12 +779,18 @@ static void draw_view(const vslot_t *frame, view_t *vw)
 
     if (frame && frame->w > 0 && frame->h > 0) {
         /* visible size: playlist resolution if it fits, else decoder output size */
-        int vis_w = (vw->pp->width > 0 && vw->pp->width <= frame->w) ? vw->pp->width : frame->w;
-        int vis_h = (vw->pp->height > 0 && vw->pp->height <= frame->h) ? vw->pp->height : frame->h;
+        /* Only remove alignment padding, never crop a different actual rendition
+         * just because the master playlist claims a smaller size. */
+        int tw=(int)vita2d_texture_get_width(frame->tex),th=(int)vita2d_texture_get_height(frame->tex);
+        int vis_w=frame->w<tw?frame->w:tw,vis_h=frame->h<th?frame->h:th;
+        if(vw->pp->width>0&&vis_w==ALIGN16(vw->pp->width))vis_w=vw->pp->width;
+        if(vw->pp->height>0&&vis_h==ALIGN16(vw->pp->height))vis_h=vw->pp->height;
+        vw->decoded_w=frame->w;vw->decoded_h=frame->h;
         float sx = (float)AW / vis_w;
         float sy = (float)SCREEN_H / vis_h;
         float s = sx < sy ? sx : sy;
         float dw = vis_w * s, dh = vis_h * s;
+        vw->display_w=(int)(dw+0.5f);vw->display_h=(int)(dh+0.5f);
         vita2d_draw_texture_part_scale(frame->tex, (AW - dw) / 2, (SCREEN_H - dh) / 2,
                                        0, 0, vis_w, vis_h, s, s);
     }
@@ -799,6 +809,7 @@ static void draw_view(const vslot_t *frame, view_t *vw)
         if(vw->pp->diagnostics)
             snprintf(line,sizeof(line),vt_msg("%s   buffer %.1f s   descartados %d"),
                      vw->pp->quality,buffered/1000.0,vw->dropped);
+        else if(vw->decoded_w>0&&vw->decoded_h>0)snprintf(line,sizeof(line),"%s | %dx%d",vw->pp->quality,vw->decoded_w,vw->decoded_h);
         else snprintf(line,sizeof(line),"%s",vw->pp->quality);
         int lw=ui_text_w(0.8f,line);
         if(lw>AW/2)lw=AW/2;
@@ -833,9 +844,15 @@ static void draw_view(const vslot_t *frame, view_t *vw)
         char a[160],b[160];
         snprintf(a,sizeof(a),"%s %.1f | %s %.2f Mbps | %s %d MHz",vt_opt(VT_O_FPS),vw->fps_now,vt_opt(VT_O_RATE),g_pl.hls.download_kbps/1000.0,vt_opt(VT_O_CPU),vw->cpu_mhz);
         snprintf(b,sizeof(b),"%s %.1f s | %s %d | %s %d",vt_opt(VT_O_BUFFER),pq_span(&g_pl.aq)/90000.0,vt_opt(VT_O_REBUFFERS),g_pl.rebuffers,vt_opt(VT_O_DROPPED),vw->dropped);
-        vita2d_draw_rectangle(0,70,AW,58,COLOR_OSD_BG);
+        char dims[160];long bandwidth=0;
+        if(vw->pp->variants&&vw->pp->variant_current>=0&&vw->pp->variant_current<vw->pp->variant_count)
+            bandwidth=vw->pp->variants[vw->pp->variant_current]->bandwidth;
+        snprintf(dims,sizeof(dims),"HLS %dx%d | AVC %dx%d | LCD %dx%d | %.2f Mbps",
+            vw->pp->width,vw->pp->height,vw->decoded_w,vw->decoded_h,vw->display_w,vw->display_h,bandwidth/1000000.0);
+        vita2d_draw_rectangle(0,70,AW,82,COLOR_OSD_BG);
         ui_text_fit(10,91,AW-20,COLOR_WHITE,0.72f,a);
         ui_text_fit(10,116,AW-20,COLOR_WHITE,0.72f,b);
+        ui_text_fit(10,141,AW-20,COLOR_WHITE,0.72f,dims);
     }
     if(vw->quality_menu){
         int n=vw->pp->variant_count,vis=n<6?n:6;
@@ -1265,6 +1282,7 @@ int player_run(const player_params_t *pp, char *err, int errlen)
             if (!first_logged) {
                 LOGI("video: primer frame %dx%d tras %llu ms", vp->slot[cur].w, vp->slot[cur].h,
                      (unsigned long long)(t_end - start_us) / 1000ULL);
+                LOGI("video: display %dx%d, filter linear, selected %s",view.display_w,view.display_h,pp->quality);
                 first_logged = 1;
             }
             if (last_present && t_draw - last_present > max_present_gap)
