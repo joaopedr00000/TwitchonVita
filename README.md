@@ -94,3 +94,7 @@ Batch changes from Test 13 feedback: explicit packaged CA file on Vita (strict p
 ### Experimental Catalog/TLS Test 15
 
 Uses a memory-backed CAINFO_BLOB on modern libcurl and verified native Sony HTTPS read-only fallback for Twitch API requests (shared native SSL lifecycle with chat). Does not disable TLS verification. Adds detailed transport diagnostics, complete profile access from live overlay by name/avatar, extended About with public metadata and social links when returned, fork credits, separate Explore and Categories navigation in both layouts (handheld order Explore, Categories, Settings). Hardware tests pending.
+
+### Experimental Catalog/TLS Test 16
+
+Fix the host compiler failure caused by unused libcurl backend information in the modern CAINFO_BLOB build; retain strict TLS options and warnings-as-errors. Add the supplied outline search, heart, compass, four-dot categories, and settings icons to the handheld navigation. The five icons use a small static alpha texture atlas, independent of fonts and network. Hardware verification remains pending.

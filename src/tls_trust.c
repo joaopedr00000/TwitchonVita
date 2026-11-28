@@ -48,7 +48,10 @@ static CURLcode trust_callback(CURL *c,void *ctx,void *unused)
 CURLcode vt_tls_configure(CURL *c)
 {
     if(!c||sizeof(vt_ca_bundle)<2)return CURLE_SSL_CACERT_BADFILE;
+    /* The host build with CAINFO_BLOB does not need backend introspection. */
+#if defined(__vita__) || LIBCURL_VERSION_NUM < 0x074D00
     const curl_version_info_data *info=curl_version_info(CURLVERSION_NOW);
+#endif
 #ifdef __vita__
     LOGI("tls: curl=%s backend=%s embedded_ca_bytes=%u",info?info->version:"?",info&&info->ssl_version?info->ssl_version:"?",(unsigned)(sizeof(vt_ca_bundle)-1));
 #endif

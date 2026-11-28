@@ -45,7 +45,7 @@ int _newlib_heap_size_user = 96 * 1024 * 1024;
 #define SETTINGS_FILE DATA_DIR "/settings.txt"
 #define LOG_FILE      DATA_DIR "/log.txt"
 #define LOG_PREV_FILE DATA_DIR "/log_prev.txt"
-#define APP_VERSION   "1.34-catalog-tls-test15"
+#define APP_VERSION   "1.34-catalog-tls-test16"
 
 #define MAX_ITEMS 100
 
@@ -618,6 +618,153 @@ static void draw_glitch(float x,float y,float scale,unsigned int color)
         vita2d_draw_rectangle(x+gx*scale,y+gy*scale,(end-gx)*scale,scale,color);gx=end;
     }
 }
+/* Outline silhouettes sampled from the supplied navigation reference.
+ * Tiny 24x120 RGBA atlas: no network, font dependency or per-frame allocation. */
+static vita2d_texture *side_icon_atlas;
+static void side_icons_init(void)
+{
+    static const char masks[5][24*24+1]={
+        "000000000000000000000000"
+        "000000000000000000000000"
+        "0000000057AA862000000000"
+        "0000004DFFFFFFE800000000"
+        "000005FFD7445BFFA0000000"
+        "00003EF80000004EF7000000"
+        "0000CF9000000004FF200000"
+        "0004FE00000000009F800000"
+        "0008F700000000002FC00000"
+        "0009F400000000000EE00000"
+        "0009F300000000000DF00000"
+        "0008F500000000000ED00000"
+        "0004FA00000000005F900000"
+        "0000DF3000000000DF400000"
+        "00006FD10000000AFA000000"
+        "000009FD610004CFFC100000"
+        "0000007FFFDCFFF9AFC10000"
+        "000000029EFEB8300BFC1000"
+        "000000000000000001CFC000"
+        "0000000000000000001DF100"
+        "000000000000000000013000"
+        "000000000000000000000000"
+        "000000000000000000000000"
+        "000000000000000000000000",
+        "000000000000000000000000"
+        "000000000000000000000000"
+        "000000000000000000000000"
+        "000000014200001330000000"
+        "0000019EFFE62AFFFC600000"
+        "00004EFCBCFFFFEBBEFA0000"
+        "0002EF50004DF91001BF8000"
+        "000AF60000013000001DF200"
+        "000EE000000000000007F600"
+        "001FC000000000000005F800"
+        "000FD000000000000006F700"
+        "000CF100000000000009F400"
+        "0007F80000000000001EE000"
+        "0001EE1000000000009F8000"
+        "00006FC10000000006FC0000"
+        "00000AFC100000006FE20000"
+        "000000CFC2000008FE400000"
+        "0000001BFE5001BFE4000000"
+        "000000008FFB6EFC20000000"
+        "0000000003BFFE6000000000"
+        "000000000005810000000000"
+        "000000000000000000000000"
+        "000000000000000000000000"
+        "000000000000000000000000",
+        "000000000000000000000000"
+        "000000000000000000000000"
+        "0000000038BDECA500000000"
+        "0000002BFFFDCEFFE6000000"
+        "000003EFB4000027EF800000"
+        "00001DF7000000002DF60000"
+        "0000AF600000000002DE2000"
+        "0004FA00000037BF404FA000"
+        "000AF300019DFFFF500CF100"
+        "000EE00009FFC7EF1008F500"
+        "001FC0000DF202FC0005F800"
+        "001FC0002FC006F80004F900"
+        "000FD0007F727DF30006F700"
+        "000DF100BFDFFFD00009F500"
+        "0008F700EFFC8400001EF100"
+        "0002FE1056200000009F9000"
+        "00008FC10000000008FD1000"
+        "00000CFD300000019FF30000"
+        "000001AFFB85479EFD400000"
+        "00000005DFFFFFFF91000000"
+        "00000000048AB96100000000"
+        "000000000000000000000000"
+        "000000000000000000000000"
+        "000000000000000000000000",
+        "000000000000000000000000"
+        "000000000000000000000000"
+        "000000000000000000000000"
+        "0000049B81000006AA810000"
+        "00006FFFFE20009FFFFC1000"
+        "0003FE85AFC005FD75BF9000"
+        "0008F6000CF20AF4000EE000"
+        "0009F40009F40BF2000CF100"
+        "0006FA002EE108F8003FD000"
+        "0000CFC8EF7001EFB9EF5000"
+        "00001CFFF700002DFFE50000"
+        "000000231000000023000000"
+        "0000049B81000006AA810000"
+        "00006FFFFE20009FFFFC1000"
+        "0003FC416FC005FB318F9000"
+        "0008F5000BF20AF3000DE000"
+        "0009F40009F40BF2000CF100"
+        "0006FA002EE108F8003FD000"
+        "0000CFCBEF7001EFCBEF5000"
+        "00001CFFF700002DFFE50000"
+        "000000231000000023000000"
+        "000000000000000000000000"
+        "000000000000000000000000"
+        "000000000000000000000000",
+        "000000000000000000000000"
+        "000000000000000000000000"
+        "000000000037761000000000"
+        "0000000005FFFFC000000000"
+        "000000001EF54BF800000000"
+        "00000577DF8002EF97710000"
+        "0000BFFFFB00005FFFFE3000"
+        "0005FE874000000177BFC000"
+        "000BF30000000000000BF300"
+        "000CF300006EFB20000AF400"
+        "0007FB0006FDBFD0003FE000"
+        "0000DF200DE209F5009F6000"
+        "0000AF300EE006F700BF3000"
+        "0003FE000BFA6EF3007FA000"
+        "000AF70002DFFF70001DF200"
+        "000CF100001573000009F400"
+        "0008F90000000000003EE100"
+        "0001EFFFF700002AFFFF7000"
+        "00002AFFFF4000CFFFD70000"
+        "000000007FD106FC10000000"
+        "000000000BFDCFF300000000"
+        "0000000001BFFE5000000000"
+        "000000000000000000000000"
+        "000000000000000000000000"
+    };
+    side_icon_atlas=vita2d_create_empty_texture_format(24,120,SCE_GXM_TEXTURE_FORMAT_U8U8U8U8_ABGR);
+    if(!side_icon_atlas)return;
+    unsigned char *pixels=vita2d_texture_get_datap(side_icon_atlas);
+    unsigned stride=vita2d_texture_get_stride(side_icon_atlas);
+    if(!pixels||stride<24*4){vita2d_free_texture(side_icon_atlas);side_icon_atlas=NULL;return;}
+    memset(pixels,0,(size_t)stride*120);
+    for(int i=0;i<5;i++)for(int y=0;y<24;y++)for(int x=0;x<24;x++){
+        char c=masks[i][y*24+x];
+        unsigned a=(unsigned)(c<='9'?c-'0':c-'A'+10)*17;
+        unsigned char *p=pixels+(size_t)(i*24+y)*stride+x*4;
+        p[0]=239;p[1]=239;p[2]=241;p[3]=(unsigned char)a;
+    }
+    vita2d_texture_set_filters(side_icon_atlas,SCE_GXM_TEXTURE_FILTER_LINEAR,SCE_GXM_TEXTURE_FILTER_LINEAR);
+}
+static void side_icon_draw(int i,int x,int y)
+{
+    if(side_icon_atlas&&i>=0&&i<5)
+        vita2d_draw_texture_part_scale(side_icon_atlas,x,y,0,i*24,24,24,1.0f,1.0f);
+}
+
 static void draw_header(void)
 {
     /* Draw sidebar after cards so offscreen tiles cannot overlap it. */
@@ -629,13 +776,14 @@ static void draw_header(void)
         int y=SIDE_Y+i*SIDE_STEP;
         vita2d_draw_rectangle(SIDE_X,y,SIDE_W,SIDE_H,i==active?RGBA8(120,80,189,255):CLASSIC_PURPLE);
         if(g_side_focus==i)ui_frame(SIDE_X,y,SIDE_W,SIDE_H,2,C_WHITE);
-        int label_w=SIDE_W-24;
+        side_icon_draw(i,SIDE_X+9,y+(SIDE_H-24)/2);
+        int label_w=SIDE_W-45;
         if(i==1&&g_tabs[TAB_FOLLOWED].state==LS_READY){
             char n[16];snprintf(n,sizeof(n),"%d",g_tabs[TAB_FOLLOWED].count);
             int nw=ui_text_w(0.8f,n);
             ui_text(SIDE_X+SIDE_W-nw-10,y+33,C_WHITE,0.8f,n);label_w-=nw+12;
         }
-        ui_text_fit(SIDE_X+12,y+33,label_w,C_WHITE,1.1f,side_label(i));
+        ui_text_fit(SIDE_X+35,y+33,label_w,C_WHITE,1.0f,side_label(i));
     }
     const char *heading=g_tab==TAB_FOLLOWED&&g_follow_offline==2?saved_title():g_tab==TAB_EXPLORE&&g_game_filter[0]?g_game_filter:side_label(active);
     ui_text_fit(GRID_X,40,770-GRID_X,C_WHITE,1.32f,heading);
@@ -1651,6 +1799,7 @@ static void init_system(void)
         LOGE("init: curl_global_init fallo");
 
     vita2d_init();
+    side_icons_init();
     vita2d_set_clear_color(C_BG);
     ui_font = vita2d_load_default_pgf();
     if (!ui_font)
@@ -2318,6 +2467,7 @@ int main(void)
         task_wait(&g_auth_task);
     }
     img_shutdown();
+    if(side_icon_atlas)vita2d_free_texture(side_icon_atlas);
     vita2d_fini();
     vita2d_free_pgf(ui_font);
     http_global_term();
