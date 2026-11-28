@@ -263,3 +263,39 @@ int m3u8_parse_media(const char *text, const char *base_url, m3u8_media_t *out)
         out->target_duration = 2;
     return 0;
 }
+
+/* Keep only a 64-segment window in memory, even for multi-hour recordings. */
+int m3u8_parse_vod(const char *text,const char *base,m3u8_media_t *out,int first_index,double seek_seconds)
+{
+    char line[4096],map[M3U8_URL_MAX]="";
+    double elapsed=0;float dur=0;int have=0,disc=0,index=0,started=0;
+    memset(out,0,sizeof(*out));
+    if(!text||strncmp(text,"#EXTM3U",7))return -1;
+    for(const char *p=text;*p;){
+        p=next_line(p,line,sizeof(line));
+        if(!strncmp(line,"#EXT-X-MEDIA-SEQUENCE:",22))out->media_sequence=atoll(line+22);
+        else if(!strncmp(line,"#EXT-X-TARGETDURATION:",22))out->target_duration=atof(line+22);
+        else if(!strncmp(line,"#EXT-X-ENDLIST",14))out->ended=1;
+        else if(!strncmp(line,"#EXT-X-BYTERANGE:",17)||(!strncmp(line,"#EXT-X-KEY:",11)&&!strstr(line,"METHOD=NONE")))return -1;
+        else if(!strncmp(line,"#EXT-X-MAP:",11)){
+            char ref[M3U8_URL_MAX];if(strstr(line,"BYTERANGE")||!get_attr(line,"URI",ref,sizeof(ref)))return -1;
+            resolve_url(base,ref,map,sizeof(map));
+        }else if(!strncmp(line,"#EXT-X-DISCONTINUITY",20))disc=1;
+        else if(!strncmp(line,"#EXTINF:",8)){dur=atof(line+8);have=1;if(!(dur>0&&dur<3600))return -1;}
+        else if(line[0]&&line[0]!='#'&&have){
+            if(!started&&(first_index>=0?index>=first_index:elapsed+dur>seek_seconds)){started=1;out->first_index=index;out->first_seconds=elapsed;}
+            if(started&&out->count<M3U8_MAX_SEGMENTS){
+                m3u8_segment_t *s=&out->seg[out->count++];s->seq=out->media_sequence+index;s->duration=dur;s->discontinuity=disc;s->map=-1;
+                resolve_url(base,line,s->url,sizeof(s->url));
+                if(map[0]){
+                    for(int k=0;k<out->nmap;k++)if(!strcmp(map,out->map_url[k]))s->map=k;
+                    if(s->map<0){if(out->nmap>=M3U8_MAX_MAPS)return -1;s->map=out->nmap++;snprintf(out->map_url[s->map],M3U8_URL_MAX,"%s",map);}
+                }
+            }
+            elapsed+=dur;index++;have=disc=0;
+        }
+    }
+    out->total_segments=index;out->total_seconds=elapsed;
+    if(out->target_duration<=0)out->target_duration=2;
+    return out->ended&&out->count?0:-1;
+}

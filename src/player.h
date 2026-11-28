@@ -24,6 +24,8 @@ typedef struct {
     const char *chat_oauth; /* OAuth token with user:write:chat (nullable) */
     const char *chat_sender_id;
     int profile;
+    int recorded,start_seconds,duration_seconds;
+    int *position_seconds,*seek_requested;
     int auto_quality;
     int has_lower;
     int diagnostics;
@@ -42,6 +44,8 @@ typedef struct {
 #define PLAYER_LOWER_QUALITY 2
 #define PLAYER_AD_SWITCH 3
 #define PLAYER_CHANGE_QUALITY 4
+#define PLAYER_SEEK 5
+#define PLAYER_RECORDING_END 6
 int player_run(const player_params_t *pp, char *err, int errlen);
 
 #endif

@@ -20,6 +20,8 @@ typedef struct {
     volatile unsigned download_kbps;
     volatile unsigned segment_losses;
     int live_edge;
+    int recorded,start_seconds;
+    volatile int actual_start,duration_seconds,position_ready;
     const char *channel,*oauth;
     int width,height;
     float fps;
@@ -35,6 +37,7 @@ typedef struct {
 
 int hls_start(hls_t *h, const char *media_url, pktqueue_t *vq, pktqueue_t *aq, int live_edge,
               const char *channel,const char *oauth,int width,int height,float fps,char *backup_url);
+int hls_start_recorded(hls_t *h,const char *media_url,pktqueue_t *vq,pktqueue_t *aq,int start_seconds);
 void hls_stop(hls_t *h);
 
 #endif

@@ -8,6 +8,7 @@
 #include "hls.h"
 #include "adts.h"
 #include "http.h"
+#include "tls_trust.h"
 #include "twitch.h"
 #include "log.h"
 
@@ -79,10 +80,12 @@ static void *hls_thread(void *argp)
     buf_t pl = {0}, seg = {0};
     static m3u8_media_t media; /* large; only one downloader runs at a time */
     long long next_seq = -1;
+    int vod_index=-1,vod_loaded=0;
     int fails = 0, segment_failures = 0, ad_probed = 0;
     unsigned long long last_new = sceKernelGetProcessTimeWide();
     long status = 0;
 
+    if(c&&h->recorded&&vt_tls_configure(c)!=CURLE_OK){http_free(c);c=NULL;}
     if (!c) {
         snprintf(h->error, sizeof(h->error), vt_msg("No se pudo iniciar curl"));
         h->finished = 1;
@@ -90,8 +93,10 @@ static void *hls_thread(void *argp)
     }
 
     while (h->running) {
-        if (http_request(c, h->url, NULL, NULL, &pl, &status, &h->abort_req) < 0 || status != 200 ||
-            m3u8_parse_media((const char *)pl.data, h->url, &media) < 0) {
+        int bad=0;
+        if(!h->recorded||!vod_loaded)bad=http_request(c,h->url,NULL,NULL,&pl,&status,&h->abort_req)<0||status!=200;
+        if(!bad)bad=h->recorded?m3u8_parse_vod((const char*)pl.data,h->url,&media,vod_index,h->start_seconds)<0:m3u8_parse_media((const char*)pl.data,h->url,&media)<0;
+        if (bad) {
             if (!h->running)
                 break;
             LOGW("hls: fallo al leer la playlist (HTTP %ld, intento %d)", status, fails + 1);
@@ -105,9 +110,10 @@ static void *hls_thread(void *argp)
             continue;
         }
         fails = 0;
+        if(h->recorded){vod_loaded=1;if(!h->position_ready){h->actual_start=(int)media.first_seconds;h->duration_seconds=(int)media.total_seconds;h->position_ready=1;}}
 
         if (next_seq < 0) { /* join near the live edge */
-            int start = media.count > h->live_edge ? media.count - h->live_edge : 0;
+            int start = !h->recorded&&media.count > h->live_edge ? media.count - h->live_edge : 0;
             next_seq = media.count ? media.seg[start].seq : 0;
             LOGI("hls: playlist con %d segmentos de %.1f s, empiezo en #%lld", media.count,
                  (double)media.target_duration, next_seq);
@@ -128,7 +134,7 @@ static void *hls_thread(void *argp)
             got_new = 1;
             last_new = sceKernelGetProcessTimeWide();
 
-            if (s->is_ad) {
+            if (!h->recorded&&s->is_ad) {
                 if (!h->in_ad) {
                     LOGI("hls: SSAI break detected; filtering ad segments");
                     demux_discontinuity(h);
@@ -184,6 +190,7 @@ static void *hls_thread(void *argp)
                     LOGW("hls: segmento #%lld perdido (HTTP %ld)", s->seq, status);
                 demux_discontinuity(h);
                 h->segment_losses++;
+                if(h->recorded){snprintf(h->error,sizeof(h->error),"Recording segment unavailable");goto done;}
                 if (++segment_failures >= 4) { h->retryable=1; h->running=0; }
                 continue;
             }
@@ -209,6 +216,7 @@ static void *hls_thread(void *argp)
             h->segments_done++;
         }
 
+        if(h->recorded){vod_index=media.first_index+media.count;if(vod_index>=media.total_segments)break;continue;}
         if (media.ended) {
             snprintf(h->error, sizeof(h->error), vt_msg("El directo ha terminado"));
             LOGI("hls: la playlist indica fin del directo");
@@ -230,10 +238,11 @@ done:
     return NULL;
 }
 
-int hls_start(hls_t *h, const char *media_url, pktqueue_t *vq, pktqueue_t *aq, int live_edge,
-              const char *channel,const char *oauth,int width,int height,float fps,char *backup_url)
+static int hls_start_mode(hls_t *h, const char *media_url, pktqueue_t *vq, pktqueue_t *aq, int live_edge,
+              const char *channel,const char *oauth,int width,int height,float fps,char *backup_url,int recorded,int start_seconds)
 {
     memset(h, 0, sizeof(*h));
+    h->recorded=recorded;h->start_seconds=start_seconds;
     h->channel=channel;h->oauth=oauth;h->width=width;h->height=height;h->fps=fps;
     h->backup_url=backup_url;
     if(backup_url)backup_url[0]=0;
@@ -262,6 +271,9 @@ int hls_start(hls_t *h, const char *media_url, pktqueue_t *vq, pktqueue_t *aq, i
     h->thread_started = 1;
     return 0;
 }
+
+int hls_start(hls_t *h,const char *url,pktqueue_t *vq,pktqueue_t *aq,int edge,const char *channel,const char *oauth,int width,int height,float fps,char *backup){return hls_start_mode(h,url,vq,aq,edge,channel,oauth,width,height,fps,backup,0,0);}
+int hls_start_recorded(hls_t *h,const char *url,pktqueue_t *vq,pktqueue_t *aq,int start){return hls_start_mode(h,url,vq,aq,1,NULL,NULL,0,0,0,NULL,1,start);}
 
 void hls_stop(hls_t *h)
 {

@@ -29,6 +29,8 @@ typedef struct {
     float target_duration;
     long long media_sequence;
     int ended;
+    int first_index,total_segments;
+    double first_seconds,total_seconds;
     int count;
     m3u8_segment_t seg[M3U8_MAX_SEGMENTS];
     int nmap;
@@ -41,5 +43,7 @@ int m3u8_parse_master(const char *text, m3u8_variant_t *out, int max);
 /* Parses a media playlist (keeps the newest M3U8_MAX_SEGMENTS segments).
  * base_url resolves relative segment URIs. Returns 0 on success. */
 int m3u8_parse_media(const char *text, const char *base_url, m3u8_media_t *out);
+
+int m3u8_parse_vod(const char *text,const char *base_url,m3u8_media_t *out,int first_index,double seek_seconds);
 
 #endif

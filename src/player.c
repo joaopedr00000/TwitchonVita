@@ -100,6 +100,7 @@ typedef struct {
     av_clock_t clock;
     int profile;
     volatile int volume;
+    volatile int paused;
     int freerun;                /* no audio: clock runs on wall time */
 
     volatile int audio_running;
@@ -135,6 +136,7 @@ static void *audio_thread(void *argp)
     memset(silence, 0, sizeof(silence));
 
     while (pl->audio_running) {
+        if(pl->paused){sceKernelDelayThread(10000);continue;}
         if (prebuffer) {
             /* wait for ~1 s of audio before (re)starting output */
             if (pq_span(&pl->aq) >= vt_profile_buffer_ms(pl->profile,pl->rebuffers) * PTS_PER_MS ||
@@ -263,6 +265,7 @@ static void *audio_thread(void *argp)
 
         int64_t grain_dur = (int64_t)AUDIO_GRAIN * 90000 / rate;
         while (accum_frames >= AUDIO_GRAIN && pl->audio_running) {
+            if(pl->paused){sceKernelDelayThread(10000);continue;}
             if(current_volume!=pl->volume){
                 current_volume=pl->volume;
                 int v=SCE_AUDIO_VOLUME_0DB*current_volume/100;
@@ -508,13 +511,13 @@ static void *vdec_thread(void *argp)
             } else if (skip_to_idr) {
                 skip_to_idr = 0;
                 LOGI("video: reanudo en keyframe");
-            } else if (lag > 1000 * PTS_PER_MS && !idr) {
+            } else if (!vp->pp->recorded&&lag > 1000 * PTS_PER_MS && !idr) {
                 skip_to_idr = 1;
                 skip = 1;
                 vp->st_idr_jumps++;
                 vp->st_undecoded++;
                 LOGW("video: %.1f s de retraso, salto al siguiente keyframe", lag / PTS_PER_MS / 1000.0);
-            } else if (lag > 150 * PTS_PER_MS && disposable) {
+            } else if (!vp->pp->recorded&&lag > 150 * PTS_PER_MS && disposable) {
                 skip = 1;
                 vp->st_undecoded++;
             } else if (disposable && chat && vp->pp->fps > 40 && lag > 80 * PTS_PER_MS) {
@@ -758,6 +761,7 @@ static int live_profile_fetch(void *arg,volatile int *abort_flag)
 typedef struct {
     const player_params_t *pp;
     int osd;
+    int recording_pos,recording_duration,paused;
     int viewers_busy;
     int dropped;
     float fps_now;
@@ -826,7 +830,17 @@ static void draw_view(const vslot_t *frame, view_t *vw)
     }
 
     vita2d_pgf *f = vw->pp->font;
-    if (vw->osd) {
+    if(vw->pp->recorded&&vw->osd){
+        char line[160];int duration=vw->recording_duration,pos=vw->recording_pos;
+        vita2d_draw_rectangle(0,0,AW,62,COLOR_OSD_BG);ui_text_fit(18,27,AW-210,C_WHITE,1.03f,vw->pp->title);ui_text_fit(AW-180,27,160,C_WHITE,.9f,vw->pp->quality);
+        ui_text_fit(18,51,AW-36,C_GREY,.85f,vw->pp->channel);
+        vita2d_draw_rectangle(0,SCREEN_H-88,AW,88,COLOR_OSD_BG);
+        vita2d_draw_rectangle(24,SCREEN_H-76,AW-48,6,C_GREY);
+        if(duration>0){float fraction=(float)pos/duration;if(fraction>1)fraction=1;if(fraction<0)fraction=0;vita2d_draw_rectangle(24,SCREEN_H-76,(AW-48)*fraction,6,C_PURPLE);}
+        snprintf(line,sizeof(line),"%02d:%02d:%02d / %02d:%02d:%02d",pos/3600,pos/60%60,pos%60,duration/3600,duration/60%60,duration%60);
+        ui_text_fit(24,SCREEN_H-43,AW-48,C_WHITE,.94f,line);
+        ui_text_fit(24,SCREEN_H-13,AW-48,C_WHITE,.9f,vt_lang_current()==2?(vw->paused?"Retomar | L/R 30s | SELECT Qualidade | Voltar":"Pausa | L/R 30s | SELECT Qualidade | Voltar"):(vw->paused?"Resume | L/R 30s | SELECT Quality | Back":"Pause | L/R 30s | SELECT Quality | Back"));
+    }else if(vw->osd){
         char line[160];
         vita2d_draw_rectangle(0, 0, AW, 64, COLOR_OSD_BG);
         const char *live=vt_tr(VT_I_LIVE);
@@ -992,7 +1006,7 @@ int player_run(const player_params_t *pp, char *err, int errlen)
     memset(pl, 0, sizeof(*pl));
     memset(&view, 0, sizeof(view));
     view.pp = pp;
-    view.osd = 1;
+    view.osd = 1;view.recording_pos=pp->start_seconds;view.recording_duration=pp->duration_seconds;
     pl->profile=pp->profile;
     pl->volume=pp->volume?*pp->volume:100;
     view.cpu_mhz=vt_profile_clock(pp->profile,pp->height,pp->fps);
@@ -1014,14 +1028,14 @@ int player_run(const player_params_t *pp, char *err, int errlen)
     }
 
     LOGI("startup: decoder ready; initialize video queue");
-    if (pq_init(&pl->vq, 900, 24 * 1024 * 1024) != 0) {
+    if (pq_init(&pl->vq, pp->recorded?240:900, (pp->recorded?6:24) * 1024 * 1024) != 0) {
         snprintf(err, (size_t)errlen, "Video queue initialization failed");
         vdec_close(&vdec);
         pthread_mutex_destroy(&pl->clock.lock);
         return -1;
     }
     LOGI("startup: initialize audio queue");
-    if (pq_init(&pl->aq, 1500, 2 * 1024 * 1024) != 0) {
+    if (pq_init(&pl->aq, pp->recorded?300:1500, pp->recorded?512*1024:2*1024*1024) != 0) {
         snprintf(err, (size_t)errlen, "Audio queue initialization failed");
         pq_destroy(&pl->vq);
         vdec_close(&vdec);
@@ -1035,8 +1049,8 @@ int player_run(const player_params_t *pp, char *err, int errlen)
         goto out_queues;
     }
     LOGI("startup: start HLS thread");
-    if (hls_start(&pl->hls, pp->url, &pl->vq, &pl->aq, vt_profile_edge(pp->profile),
-                  pp->login,pp->chat_oauth,pp->width,pp->height,pp->fps,pp->ad_backup_url) < 0) {
+    int hls_rc=pp->recorded?hls_start_recorded(&pl->hls,pp->url,&pl->vq,&pl->aq,pp->start_seconds):hls_start(&pl->hls,pp->url,&pl->vq,&pl->aq,vt_profile_edge(pp->profile),pp->login,pp->chat_oauth,pp->width,pp->height,pp->fps,pp->ad_backup_url);
+    if(hls_rc<0){
         snprintf(err, (size_t)errlen, vt_msg("No se pudo crear el hilo de descarga"));
         LOGE("%s", err);
         ret = -1;
@@ -1084,6 +1098,7 @@ int player_run(const player_params_t *pp, char *err, int errlen)
     if(pp->login)snprintf(viewer_job.login,sizeof(viewer_job.login),"%s",pp->login);
     uint64_t viewer_last_request=0;
 
+    int64_t recording_base=TS_NOPTS;uint64_t pause_started=0;
     int cur = -1;                 /* slot on screen */
     int presented = 0, late_dropped = 0;
     uint64_t start_us = sceKernelGetProcessTimeWide();
@@ -1151,12 +1166,12 @@ int player_run(const player_params_t *pp, char *err, int errlen)
                 int n=pp->variant_count,vis=n<6?n:6;
                 const int x=210,w=540,row=48,h=120+vis*row,y=(SCREEN_H-h)/2,ly=y+55;
                 int choose=!!(pressed&accept);
-                if(pressed&(pp->btn_back|SCE_CTRL_SELECT)){view.quality_menu=0;view.menu=1;choose=0;}
+                if(pressed&(pp->btn_back|SCE_CTRL_SELECT)){view.quality_menu=0;view.menu=!pp->recorded;choose=0;}
                 if(view.quality_menu&&n>0){
                     if(pressed&(SCE_CTRL_UP|SCE_CTRL_LEFT))view.quality_sel=(view.quality_sel+n-1)%n;
                     if(pressed&(SCE_CTRL_DOWN|SCE_CTRL_RIGHT))view.quality_sel=(view.quality_sel+1)%n;
                     if(input.touch_tap){
-                        if(ui_touch_hit(&input,x+w/2+8,y+h-52,w/2-24,38)){view.quality_menu=0;view.menu=1;choose=0;}
+                        if(ui_touch_hit(&input,x+w/2+8,y+h-52,w/2-24,38)){view.quality_menu=0;view.menu=!pp->recorded;choose=0;}
                         else if(ui_touch_hit(&input,x+16,y+h-52,w/2-24,38))choose=1;
                         else for(int k=0;k<vis&&view.quality_top+k<n;k++)
                             if(ui_touch_hit(&input,x+16,ly+k*row,w-32,row-4)){view.quality_sel=view.quality_top+k;choose=1;break;}
@@ -1171,6 +1186,25 @@ int player_run(const player_params_t *pp, char *err, int errlen)
                     }
                 }
                 if(pressed||input.touch_tap)last_draw=0;
+            }else if(pp->recorded){
+                if(pressed&pp->btn_back)should_exit=1;
+                if((pressed&accept)||ui_touch_hit(&input,0,SCREEN_H-36,160,36)){
+                    pl->paused=!pl->paused;view.paused=pl->paused;view.osd=1;last_draw=0;
+                    if(pl->paused)pause_started=now_us;
+                    else if(pl->freerun&&pause_started){pthread_mutex_lock(&pl->clock.lock);pl->clock.time+=now_us-pause_started;pthread_mutex_unlock(&pl->clock.lock);}
+                }
+                if((pressed&SCE_CTRL_SELECT)||ui_touch_hit(&input,SCREEN_W-180,0,180,64)){
+                    if(pp->variant_count>0&&pp->variant_requested){view.quality_menu=1;view.quality_sel=pp->variant_current;view.quality_top=view.quality_sel>=6?view.quality_sel-5:0;}
+                    last_draw=0;
+                }
+                if(pressed&SCE_CTRL_TRIANGLE){view.osd=!view.osd;last_draw=0;}
+                if(pp->seek_requested&&view.recording_duration>0){
+                    int target=-1;
+                    if(pressed&(SCE_CTRL_LTRIGGER|SCE_CTRL_RTRIGGER))target=view.recording_pos+(pressed&SCE_CTRL_RTRIGGER?30:-30);
+                    else if(pressed&(SCE_CTRL_LEFT|SCE_CTRL_RIGHT))target=view.recording_pos+(pressed&SCE_CTRL_RIGHT?10:-10);
+                    else if(view.osd&&ui_touch_hit(&input,24,SCREEN_H-84,SCREEN_W-48,24))target=(int)((double)(input.touch_x-24)*view.recording_duration/(SCREEN_W-48));
+                    if(target!=-1){if(target<0)target=0;if(target>=view.recording_duration)target=view.recording_duration-1;*pp->seek_requested=target;ret=PLAYER_SEEK;should_exit=1;}
+                }
             }else{
             if(pressed&SCE_CTRL_SELECT){view.menu=!view.menu;view.menu_sel=0;last_draw=0;}
             if(view.menu){
@@ -1279,7 +1313,7 @@ int player_run(const player_params_t *pp, char *err, int errlen)
             if(task_start(&viewer_task,viewer_fetch,&viewer_job)==0)view.viewers_busy=1;
             last_draw=0;
         }
-        if (osd_until && now_us >= osd_until) {
+        if (!pp->recorded&&osd_until && now_us >= osd_until) {
             view.osd = 0;
             osd_until = 0;
             last_draw = 0;
@@ -1340,11 +1374,11 @@ int player_run(const player_params_t *pp, char *err, int errlen)
         }
         /* end: everything shown, or the last frames can never become due (audio
          * ran out first, its clock stopped) and nothing was shown for 3 s */
-        if (pl->hls.finished && pq_count(&pl->vq) == 0 &&
+        if (!pl->paused&&pl->hls.finished && pq_count(&pl->vq) == 0 &&
             (vp->nready == 0 ||
              (pq_count(&pl->aq) == 0 && now_us - (last_present ? last_present : start_us) > 3000000ULL))) {
             snprintf(err, (size_t)errlen, "%s", pl->hls.error[0] ? pl->hls.error : vt_msg("El stream ha terminado"));
-            ret = pl->hls.retryable ? PLAYER_RECONNECT : -1;
+            ret = pp->recorded&&!pl->hls.error[0]?PLAYER_RECORDING_END:pl->hls.retryable ? PLAYER_RECONNECT : -1;
             break;
         }
 
@@ -1385,7 +1419,7 @@ int player_run(const player_params_t *pp, char *err, int errlen)
 
         /* pick the newest frame that is due; older due ones are dropped */
         int next = -1;
-        if (clk != TS_NOPTS) {
+        if (!pl->paused&&clk != TS_NOPTS) {
             pthread_mutex_lock(&vp->lock);
             while (vp->nready > 0) {
                 int h = vp->ready[0];
@@ -1415,6 +1449,15 @@ int player_run(const player_params_t *pp, char *err, int errlen)
             pthread_mutex_unlock(&vp->lock);
         }
 
+        if(pp->recorded&&pl->hls.position_ready){
+            view.recording_duration=pl->hls.duration_seconds;
+            if(next>=0&&vp->slot[next].pts!=TS_NOPTS){
+                if(recording_base==TS_NOPTS)recording_base=vp->slot[next].pts;
+                int64_t delta=vp->slot[next].pts-recording_base;
+                if(delta>=0){view.recording_pos=pl->hls.actual_start+(int)(delta/90000);if(view.recording_pos>view.recording_duration)view.recording_pos=view.recording_duration;}
+                if(pp->position_seconds)*pp->position_seconds=view.recording_pos;
+            }
+        }
         if (next >= 0) {
             uint64_t t_draw = sceKernelGetProcessTimeWide();
             draw_view(&vp->slot[next], &view); /* ends with vita2d_wait_rendering_done() */
