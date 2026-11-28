@@ -118,7 +118,7 @@ void http_native_unlock(void){pthread_mutex_unlock(&native_lock);}
 int http_native_read(const char *url,const char *body,const char *oauth,int gql,buf_t *out,long *status,volatile int *abort_flag){
     /* Only the two fixed Twitch API hosts are eligible. Never pass media
      * URLs or credentials to arbitrary hosts. GraphQL is read-only here. */
-    if(strncmp(url,"https://api.twitch.tv/helix/",27)&&strcmp(url,"https://gql.twitch.tv/gql"))return -CURLE_BAD_FUNCTION_ARGUMENT;
+    if(strncmp(url,"https://api.twitch.tv/helix/",sizeof("https://api.twitch.tv/helix/")-1)&&strcmp(url,"https://gql.twitch.tv/gql"))return -CURLE_BAD_FUNCTION_ARGUMENT;
     if(oauth&&(strlen(oauth)>100||strpbrk(oauth,"\r\n")))return -CURLE_BAD_FUNCTION_ARGUMENT;
     if(body&&(!gql||strstr(body,"mutation")))return -CURLE_BAD_FUNCTION_ARGUMENT;
     *status=0;buf_reset(out);if(out->data)out->data[0]=0;
