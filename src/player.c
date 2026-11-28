@@ -1104,7 +1104,7 @@ int player_run(const player_params_t *pp, char *err, int errlen)
         unsigned pressed=input.pressed;
         int refresh_viewers=0,write_chat=0,open_profile=0;
         if(view.follow_busy&&task_done(&follow_task)){
-            view.follow_busy=0;view.follow_state=follow_job.state<0&&pp->account_follow_known?1:follow_job.state;view.follow_status=view.follow_state==1?TW_FOLLOW_ALREADY:follow_job.status;last_draw=0;
+            view.follow_busy=0;view.follow_state=follow_job.state<0&&pp->account_follow_known?1:follow_job.state;if(view.follow_status<TW_FOLLOW_LOCAL_SAVED)view.follow_status=view.follow_state==1?TW_FOLLOW_ALREADY:follow_job.status;last_draw=0;
         }
         if(view.profile_loading&&task_done(&profile_task)){
             view.profile_loading=0;view.profile_fetched=1;

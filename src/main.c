@@ -590,6 +590,9 @@ static void draw_card(const twitch_stream_t *s, home_rect_t r, int selected)
         ui_fmt_viewers(s->viewers,v,sizeof(v));
         snprintf(second,sizeof(second),"%s%s%s",v,s->game[0]?"  /  ":"",s->game);
     }else snprintf(second,sizeof(second),"%s",vt_tr(VT_I_OFFLINE));
+    if(g_tab==TAB_FOLLOWED&&saved_has(s->login)&&!account_follow_known(s->login)){
+        const char *tag=twitch_follow_label(0,1);size_t used=strlen(second);snprintf(second+used,sizeof(second)-used," | %s",tag);
+    }
     ui_clean_text(second,line,sizeof(line));
     ui_text_fit(x+10,y+h-9,w-20,RGBA8(203,184,235,255),w>300?0.96f:0.86f,line);
     if(s->live){
@@ -686,6 +689,7 @@ static void tv_tile(const twitch_stream_t *s,int x,int y,int active){
     vita2d_texture *t=s->live?img_get(s->preview):NULL;
     if(t)ui_image(t,x,y,w,h);else draw_avatar(s->avatar,s->display,x+86,y+8,54);
     if(s->live){ui_round_rect(x+5,y+5,49,18,3,C_RED);ui_text_fit(x+9,y+18,41,C_WHITE,.68f,vt_tr(VT_I_LIVE));}
+    if(saved_has(s->login)&&!account_follow_known(s->login)){ui_round_rect(x+75,y+5,142,18,3,C_PANEL);ui_text_fit(x+79,y+18,134,C_WHITE,.65f,twitch_follow_label(0,1));}
     if(active)ui_frame(x-3,y-3,w+6,h+6,3,C_PURPLE);
     ui_text_fit(x,y+102,w,C_WHITE,.79f,s->display[0]?s->display:s->login);
 }
@@ -1678,7 +1682,7 @@ static void profile_screen(const twitch_stream_t *s)
     for(;;){
         ui_input_poll(&g_in);
         if(loading&&task_done(&task)){task_wait(&task);loading=0;}
-        if(follow_busy&&task_done(&follow_task)){follow_busy=0;follow_state=follow.state<0&&known?1:follow.state;follow_status=follow_state==1?TW_FOLLOW_ALREADY:follow.status;followers=follow.followers;snprintf(created,sizeof(created),"%s",follow.created_at);snprintf(started,sizeof(started),"%s",follow.started_at);snprintf(avatar,sizeof(avatar),"%s",follow.avatar);}
+        if(follow_busy&&task_done(&follow_task)){follow_busy=0;follow_state=follow.state<0&&known?1:follow.state;if(follow_status<TW_FOLLOW_LOCAL_SAVED)follow_status=follow_state==1?TW_FOLLOW_ALREADY:follow.status;followers=follow.followers;snprintf(created,sizeof(created),"%s",follow.created_at);snprintf(started,sizeof(started),"%s",follow.started_at);snprintf(avatar,sizeof(avatar),"%s",follow.avatar);}
         if(!(g_in.held&(g_btn_ok|g_btn_back|SCE_CTRL_START))&&!g_in.touch_down)armed=1;
         if(armed&&(g_in.pressed&(g_btn_back|SCE_CTRL_START)))break;
         int choose=armed&&(g_in.pressed&g_btn_ok);
@@ -1929,6 +1933,7 @@ int main(void)
         if (net_connected() && task_start(&g_auth_task, auth_check_run, &g_auth_job) == 0)
             g_auth_checking = 1;
     }
+    if(g_tv_layout){g_tv_home=1;g_tv_nav=0;g_tab=TAB_EXPLORE;}
     tab_load(g_tab);
     if(g_tab!=TAB_FOLLOWED)tab_load(TAB_FOLLOWED);
     if (g_tab != TAB_EXPLORE)
