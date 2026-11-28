@@ -39,5 +39,9 @@ int main(void){
     assert(!strcmp(twitch_follow_label(0,1),"Saved on Vita"));
     assert(!strcmp(twitch_follow_label(-1,0),"Follow"));
     assert(strstr(twitch_follow_notice_detail(TW_FOLLOW_LOCAL_SAVED),"saved on Vita"));
+    int offset=-1;
+    assert(twitch_parse_clip_source("{\"data\":{\"clip\":{\"video\":{\"id\":\"123\"},\"videoOffsetSeconds\":0}}}",id,sizeof(id),&offset)==0);
+    assert(!strcmp(id,"123")&&offset==0);
+    assert(twitch_parse_clip_source("{\"data\":{\"clip\":{\"video\":null,\"videoOffsetSeconds\":null}}}",id,sizeof(id),&offset)<0);
     return 0;
 }

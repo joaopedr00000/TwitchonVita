@@ -47,6 +47,7 @@ int twitch_build_gql_body(const char *login, char *out, size_t cap);
 int twitch_build_list_body(twitch_list_t kind, const char *query, char *out, size_t cap);
 
 int twitch_channel_url(const char *login, char *out, size_t cap);
+int twitch_parse_clip_source(const char *json,char *vod,size_t cap,int *offset);
 int twitch_parse_channel_bio(const char *json, char *bio, size_t cap);
 /* Unknown=-1; 0=not followed; 1=followed; 2=not eligible. */
 int twitch_parse_follow_state(const char *json,char *id,size_t cap);
@@ -91,7 +92,7 @@ int twitch_fetch_about(const char *login,const char *oauth,twitch_about_t *out,v
 int twitch_fetch_media(const char *login,const char *oauth,int kind,twitch_media_t *out,int max,char *err,size_t errlen,volatile int *abort_flag);
 int twitch_vod_variants(const char *id,const char *oauth,m3u8_variant_t *out,int max,char *err,size_t errlen,volatile int *abort_flag);
 int twitch_create_clip(void *arg,volatile int *abort_flag);
-int twitch_clip_mp4(const char *id,char *url,size_t cap,int *height,char *err,size_t errlen,volatile int *abort_flag);
+int twitch_clip_mp4(const char *id,char *url,size_t cap,int *height,char *err,size_t errlen,char *vod,size_t vod_cap,int *offset,volatile int *abort_flag);
 
 /* POSTs a GQL body. oauth may be NULL/empty. Returns 0 if HTTP 200. */
 int twitch_gql(const char *body, const char *oauth, buf_t *resp,

@@ -45,7 +45,7 @@ int _newlib_heap_size_user = 96 * 1024 * 1024;
 #define SETTINGS_FILE DATA_DIR "/settings.txt"
 #define LOG_FILE      DATA_DIR "/log.txt"
 #define LOG_PREV_FILE DATA_DIR "/log_prev.txt"
-#define APP_VERSION   "1.34-media-playback-test18"
+#define APP_VERSION   "1.34-media-playback-test19"
 
 #define MAX_ITEMS 100
 
@@ -1946,23 +1946,24 @@ static void clip_dialog(const char *login,const twitch_media_t *v,int pos,const 
     else if(j.id[0])modal_message(vt_lang_current()==2?"Clipe ainda não confirmado":"Clip not confirmed",j.url);
     else if(rc==0)modal_message("Clips",j.error[0]?j.error:"Clip failed");
 }
-typedef struct {char id[80],url[M3U8_URL_MAX],err[192];int height,rc;} clip_mp4_job_t;
-static int clip_mp4_job_run(void *arg,volatile int *abort_flag){clip_mp4_job_t *j=arg;j->rc=twitch_clip_mp4(j->id,j->url,sizeof(j->url),&j->height,j->err,sizeof(j->err),abort_flag);return j->rc;}
-static int play_clip_mp4(const twitch_media_t *v){
-    static clip_mp4_job_t j;memset(&j,0,sizeof(j));j.rc=-1;snprintf(j.id,sizeof(j.id),"%s",v->id);
+typedef struct {char id[80],url[M3U8_URL_MAX],err[192],vod[32];int height,rc,offset;} clip_mp4_job_t;
+static int clip_mp4_job_run(void *arg,volatile int *abort_flag){clip_mp4_job_t *j=arg;j->rc=twitch_clip_mp4(j->id,j->url,sizeof(j->url),&j->height,j->err,sizeof(j->err),j->vod,sizeof(j->vod),&j->offset,abort_flag);return j->rc;}
+static int play_clip_mp4(twitch_media_t *v,char *failure,size_t failure_cap){
+    static clip_mp4_job_t j;memset(&j,0,sizeof(j));j.rc=-1;snprintf(j.id,sizeof(j.id),"%s",v->id);snprintf(j.vod,sizeof(j.vod),"%s",v->vod_id);j.offset=v->offset;
     task_t task={0};if(run_with_spinner(&task,clip_mp4_job_run,&j,"Clip MP4...")<0)return 0;
-    if(j.rc<0)return -1;
+    if(j.rc<0){snprintf(failure,failure_cap,"%s",j.err);if(j.vod[0]&&j.offset>=0){snprintf(v->vod_id,sizeof(v->vod_id),"%s",j.vod);v->offset=j.offset;}return -1;}
     player_params_t pp={0};char err[192]="";int pos=0;
     pp.recorded=2;pp.duration_seconds=v->seconds>0?v->seconds:60;pp.preview_end=pp.duration_seconds+1;pp.position_seconds=&pos;
     pp.url=j.url;pp.channel=v->channel;pp.title=v->title;pp.quality="MP4";pp.height=j.height;pp.width=(j.height*16/9+1)&~1;pp.fps=30;
     pp.font=ui_font;pp.btn_back=g_btn_back;pp.profile=g_profile;pp.volume=&g_volume;
     scePowerSetArmClockFrequency(vt_profile_clock(g_profile,pp.height,pp.fps));int rc=player_run(&pp,err,sizeof(err));scePowerSetArmClockFrequency(333);
-    if(rc<0||rc==PLAYER_RECONNECT){modal_message("Clip",err[0]?err:"MP4 playback failed");return -1;}return 0;
+    if(rc<0||rc==PLAYER_RECONNECT){snprintf(failure,failure_cap,"%s",err[0]?err:"MP4 playback failed");return -1;}return 0;
 }
 static void recorded_play(const twitch_media_t *v){
     if(!strcmp(v->type,"clip")){
-        if(play_clip_mp4(v)==0)return;
-        if(!v->vod_id[0]||v->offset<0||v->seconds<1||v->offset>604800-v->seconds){modal_message("Clip",vt_lang_current()==2?"MP4 indisponível e sem gravação de origem.":"MP4 unavailable; no source VOD.");return;}
+        twitch_media_t resolved=*v;char failure[192]="";v=&resolved;
+        if(play_clip_mp4(&resolved,failure,sizeof(failure))==0)return;
+        if(!v->vod_id[0]||v->offset<0||v->seconds<1||v->offset>604800-v->seconds){char message[256];snprintf(message,sizeof(message),"%s\n%s",failure,vt_lang_current()==2?"Sem gravação de origem disponível.":"No source VOD available.");modal_message("Clip",message);return;}
         static vod_job_t clip_job;memset(&clip_job,0,sizeof(clip_job));snprintf(clip_job.id,sizeof(clip_job.id),"%s",v->vod_id);snprintf(clip_job.oauth,sizeof(clip_job.oauth),"%s",g_logged?g_auth.access:"");
         task_t ct={0};if(run_with_spinner(&ct,vod_job_run,&clip_job,vt_lang_current()==2?"Carregando clipe pela gravação...":"Loading clip from source VOD...")<0)return;
         m3u8_variant_t *options[M3U8_MAX_VARIANTS];int cn=0;
