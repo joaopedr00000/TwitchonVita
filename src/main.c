@@ -8,7 +8,6 @@
 #include <string.h>
 
 #include <psp2/apputil.h>
-#include <psp2/appmgr.h>
 #include <psp2/common_dialog.h>
 #include <psp2/ctrl.h>
 #include <psp2/touch.h>
@@ -46,7 +45,7 @@ int _newlib_heap_size_user = 96 * 1024 * 1024;
 #define SETTINGS_FILE DATA_DIR "/settings.txt"
 #define LOG_FILE      DATA_DIR "/log.txt"
 #define LOG_PREV_FILE DATA_DIR "/log_prev.txt"
-#define APP_VERSION   "1.34-profile-test2"
+#define APP_VERSION   "1.34-profile-test3"
 
 #define MAX_ITEMS 100
 
@@ -1476,22 +1475,23 @@ static int profile_run(void *arg,volatile int *abort_flag)
 {
     profile_job_t *j=arg;return twitch_fetch_channel_bio(j->login,j->bio,sizeof(j->bio),abort_flag);
 }
-static const char *profile_web_note(void)
-{
-    int l=vt_lang_current();
-    return l==2?"Seguir: abre a Twitch oficial no navegador. Se falhar, use o celular/PC.":l==1?"Seguir: abre Twitch oficial. Si falla, usa el móvil/PC.":"Follow: opens official Twitch. If unavailable, use a phone/PC.";
-}
 static void profile_screen(const twitch_stream_t *s)
 {
     char url[96],line[160];
     if(twitch_channel_url(s->login,url,sizeof(url))<0)return;
     profile_job_t job={0};snprintf(job.login,sizeof(job.login),"%s",s->login);
-    task_t task={0};
+    task_t task={0},follow_task={0};
+    twitch_follow_job_t follow={0};follow.state=-1;follow.desired=-1;
+    snprintf(follow.login,sizeof(follow.login),"%s",s->login);
+    snprintf(follow.oauth,sizeof(follow.oauth),"%s",g_logged?g_auth.access:"");
+    int follow_busy=follow.oauth[0]&&task_start(&follow_task,twitch_follow_run,&follow)==0;
+    int follow_state=-1,follow_status=follow_busy?2:follow.oauth[0]?4:1;
     int loading=task_start(&task,profile_run,&job)==0,selected=s->live?0:1,armed=0;
     const int x=92,y=32,w=776,h=480,bx=x+24,by=y+310,bw=w-48,rh=44;
     for(;;){
         ui_input_poll(&g_in);
         if(loading&&task_done(&task)){task_wait(&task);loading=0;}
+        if(follow_busy&&task_done(&follow_task)){follow_busy=0;follow_state=follow.state;follow_status=follow_task.result==0?3:4;}
         if(!(g_in.held&(g_btn_ok|g_btn_back|SCE_CTRL_START))&&!g_in.touch_down)armed=1;
         if(armed&&(g_in.pressed&(g_btn_back|SCE_CTRL_START)))break;
         int choose=armed&&(g_in.pressed&g_btn_ok);
@@ -1499,15 +1499,18 @@ static void profile_screen(const twitch_stream_t *s)
         if(g_in.pressed&SCE_CTRL_DOWN)selected=(selected+1)%3;
         for(int i=0;i<3;i++)if(armed&&ui_touch_hit(&g_in,bx,by+i*rh,bw,rh-3)){selected=i;choose=1;break;}
         if(choose){
-            if(selected==0&&s->live){
+            if(selected==0&&s->live&&!follow_busy){
                 if(loading){task_cancel(&task);task_wait(&task);}
                 play_channel(s->login,s->display,s->title,s->viewers);return;
             }
             if(selected==2)break;
             if(selected==1){
-                /* Open only a validated official URL. Never pass account tokens to the browser. */
-                int rc=sceAppMgrLaunchAppByUri(0xFFFFF,url);
-                if(rc<0)modal_message(profile_label(1),url);
+                if(!follow.oauth[0])follow_status=1;
+                else if(!follow_busy&&follow_state!=2){
+                    follow.desired=follow_state<0?-1:1-follow_state;
+                    follow_busy=task_start(&follow_task,twitch_follow_run,&follow)==0;
+                    follow_status=follow_busy?2:4;
+                }
                 armed=0;
             }
         }
@@ -1525,9 +1528,9 @@ static void profile_screen(const twitch_stream_t *s)
         ui_text_fit(x+24,y+157,w-48,C_WHITE,.88f,s->title);
         if(loading)ui_text_fit(x+24,y+187,w-48,C_GREY,.85f,vt_tr(VT_I_LOADING));
         else if(job.bio[0])wrap_text(x+24,y+187,w-48,C_GREY,.82f,job.bio,3);
-        ui_text_fit(x+24,y+270,w-48,C_GREY,.75f,profile_web_note());
+        ui_text_fit(x+24,y+270,w-48,C_GREY,.75f,twitch_follow_notice(follow_status));
         ui_text_fit(x+24,y+294,w-48,C_GREY,.8f,url);
-        const char *labels[]={vt_tr(VT_I_PLAY),profile_label(1),vt_tr(VT_I_BACK)};
+        const char *labels[]={vt_tr(VT_I_PLAY),follow_busy?vt_tr(VT_I_LOADING):twitch_follow_label(follow_state),vt_tr(VT_I_BACK)};
         for(int i=0;i<3;i++){
             int yy=by+i*rh;ui_round_rect(bx,yy,bw,rh-3,5,selected==i?CLASSIC_PURPLE:CLASSIC_TILE);
             ui_text_fit(bx+14,yy+26,bw-28,i==0&&!s->live?C_DIM:C_WHITE,.93f,labels[i]);
@@ -1535,6 +1538,7 @@ static void profile_screen(const twitch_stream_t *s)
         frame_end();
     }
     if(loading){task_cancel(&task);task_wait(&task);}
+    if(follow_busy){task_cancel(&follow_task);while(!task_done(&follow_task))sceKernelDelayThread(10000);}
     if(g_logged)tab_load(TAB_FOLLOWED);
 }
 static void profile_selected(void)

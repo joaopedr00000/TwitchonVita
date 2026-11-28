@@ -29,7 +29,6 @@
 #include "tls_trust.h"
 #include "json.h"
 #include <psp2/power.h>
-#include <psp2/appmgr.h>
 
 #include <malloc.h>
 #include <stdio.h>
@@ -770,6 +769,7 @@ typedef struct {
     int ime_active;
     int quality_menu,quality_sel,quality_top;
     int profile_open,profile_sel,profile_loading,profile_fetched;
+    int follow_busy,follow_state,follow_status;
     char profile_url[96],profile_bio[512];
     int decoded_w,decoded_h,display_w,display_h;
     const char *notice;   /* transient send/authentication feedback */
@@ -911,11 +911,9 @@ static void draw_view(const vslot_t *frame, view_t *vw)
                 s+=best;while(*s==' '||*s=='\n')s++;
             }
         }
-        int lang=vt_lang_current();
-        const char *note=lang==2?"Seguir abre a Twitch oficial no navegador.":lang==1?"Seguir abre Twitch oficial en el navegador.":"Follow opens official Twitch in the browser.";
-        ui_text_fit(x+24,y+270,w-48,C_GREY,.75f,note);
+        ui_text_fit(x+24,y+270,w-48,C_GREY,.75f,twitch_follow_notice(vw->follow_status));
         ui_text_fit(x+24,y+294,w-48,C_GREY,.8f,vw->profile_url);
-        const char *labels[]={vw->pp->follow_label?vw->pp->follow_label:"Follow / unfollow",vt_tr(VT_I_BACK)};
+        const char *labels[]={vw->follow_busy?vt_tr(VT_I_LOADING):twitch_follow_label(vw->follow_state),vt_tr(VT_I_BACK)};
         for(int i=0;i<2;i++){
             int yy=y+310+i*44;ui_round_rect(x+24,yy,w-48,41,5,i==vw->profile_sel?C_PURPLE:C_PANEL);
             ui_text_fit(x+38,yy+26,w-76,C_WHITE,.93f,labels[i]);
@@ -1072,7 +1070,11 @@ int player_run(const player_params_t *pp, char *err, int errlen)
     ui_input_poll(&input); /* swallow X from quality selector */
     int should_exit=0;
     task_t viewer_task={0};viewer_job_t viewer_job={0};
-    task_t profile_task={0};live_profile_job_t profile_job={0};
+    task_t profile_task={0},follow_task={0};live_profile_job_t profile_job={0};
+    twitch_follow_job_t follow_job={0};follow_job.state=-1;follow_job.desired=-1;view.follow_state=-1;
+    if(pp->login)snprintf(follow_job.login,sizeof(follow_job.login),"%s",pp->login);
+    if(pp->chat_oauth)snprintf(follow_job.oauth,sizeof(follow_job.oauth),"%s",pp->chat_oauth);
+    view.follow_status=follow_job.oauth[0]?0:1;
     if(pp->login)snprintf(profile_job.login,sizeof(profile_job.login),"%s",pp->login);
     if(pp->login)snprintf(viewer_job.login,sizeof(viewer_job.login),"%s",pp->login);
     uint64_t viewer_last_request=0;
@@ -1096,6 +1098,9 @@ int player_run(const player_params_t *pp, char *err, int errlen)
         ui_input_poll(&input);
         unsigned pressed=input.pressed;
         int refresh_viewers=0,write_chat=0,open_profile=0;
+        if(view.follow_busy&&task_done(&follow_task)){
+            view.follow_busy=0;view.follow_state=follow_job.state;view.follow_status=follow_task.result==0?3:4;last_draw=0;
+        }
         if(view.profile_loading&&task_done(&profile_task)){
             view.profile_loading=0;view.profile_fetched=1;
             if(profile_task.result==0)snprintf(view.profile_bio,sizeof(view.profile_bio),"%s",profile_job.bio);
@@ -1125,9 +1130,11 @@ int player_run(const player_params_t *pp, char *err, int errlen)
                 for(int i=0;i<2;i++)if(ui_touch_hit(&input,116,342+i*44,728,41)){view.profile_sel=i;choose=1;break;}
                 if(choose){
                     if(view.profile_sel==1)view.profile_open=0;
-                    else if(view.profile_url[0]){
-                        int rc=sceAppMgrLaunchAppByUri(0xFFFFF,view.profile_url);
-                        LOGI("profile: browser result=0x%08X",(unsigned)rc);
+                    else if(!follow_job.oauth[0])view.follow_status=1;
+                    else if(!view.follow_busy&&view.follow_state!=2){
+                        follow_job.desired=view.follow_state<0?-1:1-view.follow_state;
+                        view.follow_busy=task_start(&follow_task,twitch_follow_run,&follow_job)==0;
+                        view.follow_status=view.follow_busy?2:4;
                     }
                 }
             }
@@ -1232,6 +1239,7 @@ int player_run(const player_params_t *pp, char *err, int errlen)
         if(should_exit)break;
         if(open_profile&&twitch_channel_url(pp->login,view.profile_url,sizeof(view.profile_url))==0){
             view.profile_open=1;view.profile_sel=0;view.menu=0;view.quality_menu=0;last_draw=0;
+            if(follow_job.oauth[0]&&!view.follow_busy){follow_job.desired=-1;view.follow_busy=task_start(&follow_task,twitch_follow_run,&follow_job)==0;view.follow_status=view.follow_busy?2:4;}
             if(!view.profile_loading&&!view.profile_fetched&&task_start(&profile_task,live_profile_fetch,&profile_job)==0)view.profile_loading=1;
             LOGI("profile: opened in player @%s",pp->login);
         }
@@ -1448,6 +1456,7 @@ int player_run(const player_params_t *pp, char *err, int errlen)
     if(view.ime_active){sceImeDialogAbort();sceImeDialogTerm();}
     if(view.viewers_busy){task_cancel(&viewer_task);while(!task_done(&viewer_task))sceKernelDelayThread(10000);}
     if(view.profile_loading){task_cancel(&profile_task);while(!task_done(&profile_task))sceKernelDelayThread(10000);}
+    if(view.follow_busy){task_cancel(&follow_task);while(!task_done(&follow_task))sceKernelDelayThread(10000);}
     /* teardown: unblock producers first, then stop threads */
     pq_abort(&pl->vq);
     pq_abort(&pl->aq);

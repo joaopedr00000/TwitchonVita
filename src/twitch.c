@@ -9,6 +9,7 @@
 
 #ifndef VT_NO_NET
 #include "http.h"
+#include "tls_trust.h"
 #endif
 
 int twitch_sanitize_login(const char *in, char *out, size_t cap)
@@ -74,6 +75,41 @@ int twitch_parse_channel_bio(const char *json, char *bio, size_t cap)
     json_free(root);return 0;
 }
 
+int twitch_parse_follow_state(const char *json,char *id,size_t cap)
+{
+    if(!id||!cap)return -1;
+    id[0]=0;if(!json)return -1;
+    json_t *root=json_parse(json);
+    json_t *u=json_path(root,"data.user");
+    const char *s=json_str(u,"id",NULL);
+    json_t *rel=json_path(u,"self.follower"),*can=json_path(u,"self.canFollow");
+    int state=-1;
+    if(!json_get(root,"errors")&&s&&*s&&strlen(s)<cap&&strlen(s)==strspn(s,"0123456789")&&rel){
+        if(rel->type==JSON_OBJECT)state=1;
+        else if(rel->type==JSON_NULL&&can&&can->type==JSON_BOOL)state=can->num?0:2;
+        if(state>=0)snprintf(id,cap,"%s",s);
+    }
+    json_free(root);return state;
+}
+const char *twitch_follow_label(int state)
+{
+    int l=vt_lang_current();
+    if(state==1)return l==2?"Deixar de seguir":l==1?"Dejar de seguir":"Unfollow";
+    if(state==0)return l==2||l==1?"Seguir":"Follow";
+    if(state==2)return l==2?"Indisponível":l==1?"No disponible":"Unavailable";
+    return l==2?"Consultar Follow":l==1?"Consultar seguimiento":"Check follow status";
+}
+const char *twitch_follow_notice(int status)
+{
+    int l=vt_lang_current();
+    switch(status){
+    case 1:return l==2?"Entre na sua conta para seguir.":l==1?"Inicia sesión para seguir.":"Sign in to follow.";
+    case 2:return l==2?"Confirmando com a Twitch...":l==1?"Confirmando con Twitch...":"Checking with Twitch...";
+    case 3:return l==2?"Estado confirmado pela Twitch.":l==1?"Estado confirmado por Twitch.":"Confirmed by Twitch.";
+    case 4:return l==2?"A Twitch não confirmou a ação. Tente consultar novamente.":l==1?"Twitch no confirmó la acción.":"Twitch did not confirm. Check again.";
+    default:return l==2?"Follow experimental na conta Twitch.":l==1?"Seguimiento experimental en Twitch.":"Experimental Twitch account follow.";
+    }
+}
 static int build_gql_profile(const char *login,const char *profile,char *out,size_t cap)
 {
     /* Inline query (no persisted-query hash) so it keeps working when hashes rotate. */
@@ -354,6 +390,61 @@ int twitch_gql(const char *body, const char *oauth, buf_t *resp,
     curl_slist_free_all(hdr);
     http_free(c);
     return ret;
+}
+
+/* Authenticated GraphQL requests: verified TLS only, no redirect, no automatic
+ * mutation retry and no logging of credentials or response bodies. */
+static int follow_gql(const char *body,const char *oauth,buf_t *resp,volatile int *abort_flag)
+{
+    if(!oauth||!*oauth||strlen(oauth)>100||strpbrk(oauth,"\r\n"))return -1;
+    CURL *c=http_new();if(!c)return -1;
+    if(vt_tls_configure(c)!=CURLE_OK){http_free(c);return -1;}
+    curl_easy_setopt(c,CURLOPT_FOLLOWLOCATION,0L);
+    curl_easy_setopt(c,CURLOPT_CONNECTTIMEOUT,5L);
+    curl_easy_setopt(c,CURLOPT_TIMEOUT,10L);
+    char auth[160];snprintf(auth,sizeof(auth),"Authorization: OAuth %s",oauth);
+    struct curl_slist *h=NULL,*next;
+    const char *headers[]={"Client-ID: " TWITCH_CLIENT_ID,"Content-Type: text/plain;charset=UTF-8",auth};
+    int rc=-1;long status=0;
+    for(int i=0;i<3;i++){
+        next=curl_slist_append(h,headers[i]);if(!next)goto done;h=next;
+    }
+    if(http_request(c,"https://gql.twitch.tv/gql",body,h,resp,&status,abort_flag)==0&&status==200)rc=0;
+done:
+    curl_slist_free_all(h);http_free(c);return rc;
+}
+static int follow_read(twitch_follow_job_t *j,volatile int *abort_flag)
+{
+    char url[96],body[512];
+    j->state=-1;j->id[0]=0;
+    if(twitch_channel_url(j->login,url,sizeof(url))<0)return -1;
+    snprintf(body,sizeof(body),"{\"query\":\"query { user(login: \\\"%s\\\") { id self { canFollow follower { __typename } } } }\"}",j->login);
+    buf_t resp={0};
+    if(follow_gql(body,j->oauth,&resp,abort_flag)==0)
+        j->state=twitch_parse_follow_state((const char*)resp.data,j->id,sizeof(j->id));
+    buf_free(&resp);return j->state>=0?0:-1;
+}
+int twitch_follow_run(void *arg,volatile int *abort_flag)
+{
+    twitch_follow_job_t *j=arg;
+    if(follow_read(j,abort_flag)<0)return -1;
+    if(j->desired<0||j->state==j->desired)return 0;
+    if(j->state==2||j->desired>1||(abort_flag&&*abort_flag))return -1;
+    char body[512];
+    if(j->desired==1)
+        snprintf(body,sizeof(body),"{\"query\":\"mutation { followUser(input: {targetID: \\\"%s\\\", disableNotifications: true}) { follow { __typename } error { __typename } } }\"}",j->id);
+    else
+        snprintf(body,sizeof(body),"{\"query\":\"mutation { unfollowUser(input: {targetID: \\\"%s\\\"}) { follow { __typename } } }\"}",j->id);
+    buf_t resp={0};
+    int rc=follow_gql(body,j->oauth,&resp,abort_flag);
+    json_t *root=rc==0&&resp.data?json_parse((const char*)resp.data):NULL;
+    json_t *payload=json_path(root,j->desired?"data.followUser":"data.unfollowUser");
+    json_t *error=json_get(payload,"error");
+    int accepted=payload&&payload->type==JSON_OBJECT&&!json_get(root,"errors")&&(!error||error->type==JSON_NULL);
+    json_free(root);buf_free(&resp);
+    /* Do not retry a mutation even on transport failure; re-read actual state. */
+    int verified=follow_read(j,abort_flag);
+    return accepted&&verified==0&&j->state==j->desired?0:-1;
 }
 
 int twitch_fetch_channel_bio(const char *login,char *bio,size_t cap,volatile int *abort_flag)

@@ -39,6 +39,14 @@ int twitch_build_list_body(twitch_list_t kind, const char *query, char *out, siz
 
 int twitch_channel_url(const char *login, char *out, size_t cap);
 int twitch_parse_channel_bio(const char *json, char *bio, size_t cap);
+/* Unknown=-1; 0=not followed; 1=followed; 2=not eligible. */
+int twitch_parse_follow_state(const char *json,char *id,size_t cap);
+const char *twitch_follow_label(int state);
+const char *twitch_follow_notice(int status);
+typedef struct {
+    char login[32],oauth[128],id[32];
+    int state,desired; /* desired=-1 reads; 0/1 explicit user action */
+} twitch_follow_job_t;
 
 /* Extracts value/signature from the PlaybackAccessToken response. 0 on success. */
 int twitch_parse_token(const char *json, char *token, size_t token_cap,
@@ -64,6 +72,7 @@ void twitch_sort_by_viewers(twitch_stream_t *s, int n);
 int twitch_gql(const char *body, const char *oauth, buf_t *resp,
                char *err, size_t errlen, volatile int *abort_flag);
 
+int twitch_follow_run(void *arg,volatile int *abort_flag);
 int twitch_fetch_channel_bio(const char *login, char *bio, size_t cap, volatile int *abort_flag);
 int twitch_fetch_list(twitch_list_t kind, const char *query, const char *oauth,
                       twitch_stream_t *out, int max, char *err, size_t errlen,
