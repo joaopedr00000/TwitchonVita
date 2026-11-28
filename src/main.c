@@ -45,7 +45,7 @@ int _newlib_heap_size_user = 96 * 1024 * 1024;
 #define SETTINGS_FILE DATA_DIR "/settings.txt"
 #define LOG_FILE      DATA_DIR "/log.txt"
 #define LOG_PREV_FILE DATA_DIR "/log_prev.txt"
-#define APP_VERSION   "1.34-media-playback-test24"
+#define APP_VERSION   "1.34-media-playback-test25"
 
 #define MAX_ITEMS 100
 
@@ -1442,48 +1442,49 @@ static int login_poll_run(void *arg, volatile int *abort_flag)
     return r;
 }
 
-static void account_logged_in(void)
+/* Explicit confirmation is handled inside the profile Session tab. */
+static void account_logout(void)
 {
-    const int w=620,h=280,x0=(SCREEN_W-w)/2,y0=(SCREEN_H-h)/2;
-    char name[80];
-    ui_clean_text(g_auth.display[0] ? g_auth.display : g_auth.login, name, sizeof(name));
-    for (;;) {
-        ui_input_poll(&g_in);
-        if ((g_in.pressed & g_btn_back)||ui_touch_hit(&g_in,x0+324,y0+h-62,270,42))
-            return;
-        if ((g_in.pressed & SCE_CTRL_TRIANGLE)||ui_touch_hit(&g_in,x0+26,y0+h-62,270,42)) {
-            LOGI("sesion cerrada por el usuario");
-            if (g_auth_checking) {
-                task_cancel(&g_auth_task);
-                task_wait(&g_auth_task);
-                g_auth_checking = 0;
-                memset(&g_auth_job, 0, sizeof(g_auth_job));
-            }
-            g_logged = 0;
-            memset(&g_auth, 0, sizeof(g_auth));
-            sceIoRemove(AUTH_FILE);
-            g_tabs[TAB_FOLLOWED].count = 0;
-            tab_load(TAB_FOLLOWED);
-            toast(vt_msg("Has cerrado sesion"));
-            return;
-        }
-        frame_begin();
-        draw_home();
-        int x, y;
-        draw_modal_box(w,h,&x,&y);
-        draw_avatar(g_auth.avatar,name,x+26,y+26,76);
-        ui_text_fit(x+122,y+55,w-148,C_WHITE,1.3f,name);
-        char at[48];
-        snprintf(at,sizeof(at),"@%s",g_auth.login);
-        ui_text_fit(x+122,y+86,w-148,C_GREY,0.9f,at);
-        vita2d_draw_rectangle(x+26,y+116,w-52,1,C_PANEL2);
-        wrap_text(x+26,y+145,w-52,C_GREY,0.9f,vt_msg("Sesion iniciada: Siguiendo y anuncios segun tu cuenta."),3);
-        vita2d_draw_rectangle(x+26,y+h-62,270,42,CLASSIC_TILE);
-        vita2d_draw_rectangle(x+324,y+h-62,270,42,CLASSIC_PURPLE);
-        footer_hint(x+38,246,y+h-35,"△",vt_msg("Cerrar sesion"));
-        footer_hint(x+336,246,y+h-35,g_back_name,vt_msg("Volver"));
-        frame_end();
+    LOGI("sesion cerrada por el usuario");
+    if(g_auth_checking){
+        task_cancel(&g_auth_task);
+        task_wait(&g_auth_task);
+        g_auth_checking=0;
+        memset(&g_auth_job,0,sizeof(g_auth_job));
     }
+    g_logged=0;
+    memset(&g_auth,0,sizeof(g_auth));
+    memset(account_oauth,0,sizeof(account_oauth));
+    account_n=0;
+    sceIoRemove(AUTH_FILE);
+    g_tabs[TAB_FOLLOWED].count=0;
+    tab_load(TAB_FOLLOWED);
+    toast(vt_msg("Has cerrado sesion"));
+}
+static const char *session_text(int k)
+{
+    static const char *const labels[VT_LANG_COUNT][3]={
+        {"Do you want to sign out?","Yes","No"},
+        {"¿Deseas cerrar sesión?","Sí","No"},
+        {"Deseja sair da conta?","Sim","Não"},
+        {"Voulez-vous vous déconnecter ?","Oui","Non"},
+        {"Vuoi uscire dall'account?","Sì","No"},
+        {"Möchtest du dich abmelden?","Ja","Nein"},
+        {"Выйти из аккаунта?","Да","Нет"},
+        {"Ingin keluar dari akun?","Ya","Tidak"},
+        {"Gusto mo bang mag-sign out?","Oo","Hindi"},
+        {"Gusto ka bang mogawas sa account?","Oo","Dili"},
+        {"Wil je uitloggen?","Ja","Nee"},
+        {"Czy chcesz się wylogować?","Tak","Nie"},
+        {"Çıkış yapmak istiyor musun?","Evet","Hayır"},
+        {"Вийти з облікового запису?","Так","Ні"},
+        {"Vill du logga ut?","Ja","Nej"},
+        {"ログアウトしますか？","はい","いいえ"},
+        {"로그아웃하시겠습니까?","예","아니요"},
+        {"要退出登录吗？","是","否"},
+        {"要登出帳號嗎？","是","否"}
+    };
+    int l=vt_lang_current();return labels[l>=0&&l<VT_LANG_COUNT?l:0][k];
 }
 
 static void account_login(void)
@@ -2172,22 +2173,22 @@ static void channel_full_profile(const twitch_stream_t *channel,int own,int retu
         run_with_spinner(&t,profile_run,&bio,vt_tr(VT_I_LOADING));snprintf(details.about.bio,sizeof(details.about.bio),"%s",bio.bio);}
     static media_job_t catalogs[2];memset(catalogs,0,sizeof(catalogs));
     task_t mt={0};int active=-1,state[2]={0,0},cursor[2]={0,0};
-    int sel=0,armed=0,grid_focus=0;const int count=own?7:4,step=924/count;
+    int sel=0,armed=0,grid_focus=0,session_focus=0,session_yes=0;const int count=own?7:4,step=924/count;
     for(;;){
         ui_input_poll(&g_in);unsigned b=g_in.pressed;
         if(!(g_in.held&(g_btn_ok|g_btn_back))&&!g_in.touch_down)armed=1;
         if(active>=0&&task_done(&mt)){task_wait(&mt);state[active]=catalogs[active].n>=0?2:3;active=-1;}
         if((own&&!g_logged)||(armed&&(b&g_btn_back))){
-            if(grid_focus&&(!own||g_logged)){grid_focus=0;armed=0;continue;}
+            if((grid_focus||session_focus)&&(!own||g_logged)){grid_focus=0;session_focus=0;session_yes=0;armed=0;continue;}
             if(active>=0){task_cancel(&mt);while(!task_done(&mt))sceKernelDelayThread(10000);task_wait(&mt);}return;
         }
         int ci=sel==1?0:sel==2?1:-1;
-        if(!grid_focus){
+        if(!grid_focus&&!session_focus){
             if(b&SCE_CTRL_LEFT)sel=(sel+count-1)%count;
             if(b&SCE_CTRL_RIGHT)sel=(sel+1)%count;
         }
         int choose=armed&&(b&g_btn_ok),tab_touch=0;
-        for(int i=0;i<count;i++)if(armed&&ui_touch_hit(&g_in,18+i*step,138,step-4,44)){sel=i;grid_focus=0;tab_touch=1;choose=0;break;}
+        for(int i=0;i<count;i++)if(armed&&ui_touch_hit(&g_in,18+i*step,138,step-4,44)){sel=i;grid_focus=0;session_focus=0;session_yes=0;tab_touch=1;choose=0;break;}
         ci=sel==1?0:sel==2?1:-1;
         if(ci>=0){
             media_job_t *j=&catalogs[ci];
@@ -2225,12 +2226,32 @@ static void channel_full_profile(const twitch_stream_t *channel,int own,int retu
                     ui_input_poll(&g_in);
                 }
             }
+        }else if(own&&sel==6){
+            /* Selecting the tab only displays the question. The default is No.
+             * A touch on either button works without D-pad focus. */
+            int confirm=0;
+            if(!session_focus&&(choose||(b&SCE_CTRL_DOWN))){session_focus=1;session_yes=0;choose=0;}
+            else if(session_focus){
+                if(b&SCE_CTRL_UP){session_focus=0;session_yes=0;choose=0;}
+                if(b&SCE_CTRL_LEFT)session_yes=1;
+                if(b&SCE_CTRL_RIGHT)session_yes=0;
+                if(choose)confirm=1;
+            }
+            if(armed&&ui_touch_hit(&g_in,180,320,280,58)){session_yes=1;confirm=1;}
+            if(armed&&ui_touch_hit(&g_in,500,320,280,58)){session_yes=0;confirm=1;}
+            if(confirm){
+                armed=0;
+                if(session_yes){
+                    if(active>=0){task_cancel(&mt);while(!task_done(&mt))sceKernelDelayThread(10000);task_wait(&mt);}
+                    account_logout();return;
+                }
+                session_focus=0;session_yes=0;
+            }
         }else if(choose||tab_touch){
             armed=0;
             if(sel==0){if(active>=0){task_cancel(&mt);while(!task_done(&mt))sceKernelDelayThread(10000);task_wait(&mt);active=-1;}if(return_to_live)return;if(s.live){play_channel(s.login,s.display,s.title,s.viewers);return;}else toast(vt_tr(VT_I_OFFLINE));}
             if(own&&sel==3)recordings_screen_kind(NULL,5);
             if(own&&sel==4)recordings_screen_kind(NULL,6);
-            if(own&&sel==6){if(active>=0){task_cancel(&mt);while(!task_done(&mt))sceKernelDelayThread(10000);task_wait(&mt);active=-1;}account_logged_in();if(!g_logged)return;}
         }
         frame_begin();vita2d_draw_rectangle(0,0,960,544,CLASSIC_BG);
         draw_avatar(s.avatar,s.display,25,20,84);
@@ -2255,6 +2276,14 @@ static void channel_full_profile(const twitch_stream_t *channel,int own,int retu
             wrap_text(30,327,900,C_GREY,.87f,details.about.bio[0]?details.about.bio:ptbr?"Não disponível.":"Unavailable.",3);
             ui_text_fit(30,411,900,C_WHITE,1.0f,ptbr?"Links e redes sociais":"Links and social media");
             wrap_text(30,439,900,C_GREY,.8f,details.about.links[0]?details.about.links:ptbr?"Links não disponibilizados pela Twitch.":"Links unavailable from Twitch.",3);
+        }else if(own&&sel==6){
+            ui_text_center(480,270,C_WHITE,1.25f,session_text(0));
+            for(int i=0;i<2;i++){
+                int xx=180+i*320,selected=(i==0)==session_yes;
+                ui_round_rect(xx,320,280,58,6,selected?CLASSIC_PURPLE:C_PANEL);
+                if(selected&&session_focus)ui_frame(xx,320,280,58,2,C_WHITE);
+                ui_text_center(xx+140,358,C_WHITE,1.05f,session_text(i+1));
+            }
         }else if(sel==0){ui_text_fit(30,235,900,C_WHITE,1.1f,s.live?s.title:vt_tr(VT_I_OFFLINE));wrap_text(30,285,900,C_GREY,.9f,details.about.bio,4);}
         else if(ci>=0){
             media_job_t *j=&catalogs[ci];
@@ -2267,7 +2296,10 @@ static void channel_full_profile(const twitch_stream_t *channel,int own,int retu
                 char pages[48];snprintf(pages,sizeof(pages),"%d / %d",page/8+1,(j->n+7)/8);ui_text_fit(810,520,125,C_GREY,.82f,pages);
             }
         }else ui_text_fit(30,235,900,C_GREY,1.05f,vt_lang_current()==2?"Confirme para abrir esta seção":"Confirm to open this section");
-        ui_text_fit(25,520,ci>=0?770:910,C_WHITE,.82f,ci>=0?(vt_lang_current()==2?"Setas: navegar | L/R: páginas | X: abrir | Triângulo: atualizar | O: voltar":"D-pad: navigate | L/R: pages | Confirm: open | Triangle: refresh | Back"):(vt_lang_current()==2?"Esquerda/direita: abas | Confirmar | Voltar":"Left/right: tabs | Confirm | Back"));
+        if(own&&sel==6){
+            ui_hint_bounded(25,520,440,g_ok_name,vt_msg("Aceptar"));
+            ui_hint_bounded(500,520,420,g_back_name,vt_tr(VT_I_BACK));
+        }else ui_text_fit(25,520,ci>=0?770:910,C_WHITE,.82f,ci>=0?(vt_lang_current()==2?"Setas: navegar | L/R: páginas | X: abrir | Triângulo: atualizar | O: voltar":"D-pad: navigate | L/R: pages | Confirm: open | Triangle: refresh | Back"):(vt_lang_current()==2?"Esquerda/direita: abas | Confirmar | Voltar":"Left/right: tabs | Confirm | Back"));
         frame_end();
     }
 }
@@ -2432,14 +2464,32 @@ static void tv_input(void){
     if(p&(SCE_CTRL_LTRIGGER|SCE_CTRL_RTRIGGER)){int next=(g_tv_nav+(p&SCE_CTRL_RTRIGGER?1:TV_NAV_COUNT-1))%TV_NAV_COUNT;tv_activate(next);return;}
     if(g_in.touch_tap){
         for(int i=0;i<TV_NAV_COUNT;i++)if(ui_touch_hit(&g_in,TV_NAV_X+i*TV_NAV_STEP,0,TV_NAV_STEP,54)){tv_activate(i);return;}
-        if(ui_touch_hit(&g_in,397,!g_tv_home&&g_tab==TAB_SEARCH?234:197,170,30)&&!g_tv_nav_focus){open_selected();return;}
+        /* Touch activates the visible hero directly, independent of nav focus.
+         * Mirror draw_tv_home's selection fallback and exact hit geometry. */
+        int hy=(!g_tv_home&&g_tab==TAB_SEARCH)?102:65,hh=(!g_tv_home&&g_tab==TAB_SEARCH)?157:165;
+        if(ui_touch_hit(&g_in,397,hy+132,170,30)||ui_touch_hit(&g_in,20,hy,hh*16/9,hh)){
+            int pos=home_pos(tb),n=home_count(tb);
+            int idx=pos>=0?home_index(tb,pos):n?home_index(tb,0):-1;
+            if(idx>=0){g_tv_nav_focus=0;g_side_focus=-1;tb->sel=idx;open_selected();}
+            return;
+        }
         if(g_tab==TAB_SEARCH&&ui_touch_hit(&g_in,20,60,920,35)){tb->sel=-1;g_tv_nav_focus=0;open_selected();return;}
         int grid=!g_tv_home&&g_tab==TAB_EXPLORE&&!g_game_id[0]&&!g_game_filter[0];
         for(int row=0;row<(g_tv_home?2:1);row++){
             int t=g_tv_home?(row?TAB_EXPLORE:TAB_FOLLOWED):g_tab;tab_t *r=&g_tabs[t];int n=home_count(r),pos=home_pos(r),slots=grid?8:4,first=pos>=0?pos/slots*slots:0;
             for(int k=0;k<slots&&first+k<n;k++)if(ui_touch_hit(&g_in,20+(k%4)*233,tv_row_top()+(row+k/4)*TV_ROW_STEP,TV_TILE_W,TV_TILE_HIT_H)){g_tab=t;g_side_focus=-1;g_tv_nav_focus=0;r->sel=home_index(r,first+k);open_selected();return;}
         }
-        if(ui_touch_hit(&g_in,SCREEN_W-180,FOOTER_Y,180,SCREEN_H-FOOTER_Y)){profile_selected();return;}
+        int cell=(SCREEN_W-24)/(g_tab!=TAB_EXPLORE?6:5);
+        if(ui_touch_hit(&g_in,12+cell*(g_tab!=TAB_EXPLORE?5:4),FOOTER_Y,cell,SCREEN_H-FOOTER_Y)){
+            g_tv_nav_focus=0;g_side_focus=-1;profile_selected();return;
+        }
+        if(ui_touch_hit(&g_in,12,FOOTER_Y,cell,SCREEN_H-FOOTER_Y)){
+            g_tv_nav_focus=0;g_side_focus=-1;
+            if(tb->need_login)tv_activate(5);else open_selected();return;
+        }
+        if(ui_touch_hit(&g_in,12+cell,FOOTER_Y,cell,SCREEN_H-FOOTER_Y)){img_clear();tab_load(g_tab);return;}
+        if(ui_touch_hit(&g_in,12+cell*(g_tab!=TAB_EXPLORE?4:3),FOOTER_Y,cell,SCREEN_H-FOOTER_Y)){extras_menu();return;}
+        return;
     }
     if(p&SCE_CTRL_TRIANGLE){img_clear();tab_load(g_tab);return;}
     if(p&SCE_CTRL_SQUARE&&g_tab==TAB_FOLLOWED){g_follow_offline=(g_follow_offline+1)%3;settings_save();following_rebuild();tab_load(g_tab);return;}
@@ -2516,9 +2566,11 @@ int main(void)
         if(g_tv_layout){tv_input();sceKernelPowerTick(SCE_KERNEL_POWER_TICK_DISABLE_AUTO_SUSPEND);frame_begin();draw_home();frame_end();continue;}
 
         if(ui_touch_hit(&g_in,778,0,182,HEADER_H)){g_side_focus=PROFILE_FOCUS;account_screen();continue;}
-        if(g_side_focus==PROFILE_FOCUS){if(p&g_btn_ok){account_screen();continue;}if(p&SCE_CTRL_DOWN)g_side_focus=-1;else if(p&(SCE_CTRL_LEFT|g_btn_back))g_side_focus=side_active();if(!(p&(SCE_CTRL_LTRIGGER|SCE_CTRL_RTRIGGER|SCE_CTRL_SELECT))){frame_begin();draw_home();frame_end();continue;}}
+        /* Never consume a touch/drag in the controller-only profile focus path. */
+        if(g_side_focus==PROFILE_FOCUS&&!g_in.touch_tap&&!g_in.touch_down){if(p&g_btn_ok){account_screen();continue;}if(p&SCE_CTRL_DOWN)g_side_focus=-1;else if(p&(SCE_CTRL_LEFT|g_btn_back))g_side_focus=side_active();if(!(p&(SCE_CTRL_LTRIGGER|SCE_CTRL_RTRIGGER|SCE_CTRL_SELECT))){frame_begin();draw_home();frame_end();continue;}}
         int profile_cell=(SCREEN_W-24)/(g_tab!=TAB_EXPLORE?6:5);
         if((p&SCE_CTRL_START)||ui_touch_hit(&g_in,12+profile_cell*(g_tab!=TAB_EXPLORE?5:4),FOOTER_Y,profile_cell,SCREEN_H-FOOTER_Y)){
+            if(g_in.touch_tap)g_side_focus=-1;
             profile_selected();continue;
         }
         if (p & (SCE_CTRL_LTRIGGER | SCE_CTRL_RTRIGGER)) {
@@ -2527,7 +2579,7 @@ int main(void)
             continue;
         }
         if(p&SCE_CTRL_SELECT){extras_menu();continue;}
-        if(g_in.touch_tap&&g_in.touch_x<GRID_X){
+        if(g_in.touch_tap&&g_in.touch_x<GRID_X&&g_in.touch_y<FOOTER_Y){
             for(int i=0;i<SIDE_COUNT;i++)if(ui_touch_hit(&g_in,SIDE_X,SIDE_Y+i*SIDE_STEP,SIDE_W,SIDE_H)){g_side_focus=i;side_open(i);break;}
             continue;
         }

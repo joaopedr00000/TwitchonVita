@@ -124,13 +124,13 @@ jobs:
                 assert z.read(name)==pathlib.Path(name).read_bytes(), name
           print('PASS experimental VitaSDK VPK, version 01.34, title ID, CA bundle and approved artwork')
           PY
-          cp build-ci/VitaTwitch.vpk Twitch-1.34-MediaPlayback24.vpk
-          sha256sum Twitch-1.34-MediaPlayback24.vpk > SHA256SUMS.txt
+          cp build-ci/VitaTwitch.vpk Twitch-1.34-MediaPlayback25.vpk
+          sha256sum Twitch-1.34-MediaPlayback25.vpk > SHA256SUMS.txt
       - uses: actions/upload-artifact@v4
         with:
-          name: Twitch-1.34-MediaPlayback24-EXPERIMENTAL
+          name: Twitch-1.34-MediaPlayback25-EXPERIMENTAL
           path: |
-            Twitch-1.34-MediaPlayback24.vpk
+            Twitch-1.34-MediaPlayback25.vpk
             SHA256SUMS.txt
             ca-bundle.sha256
           retention-days: 14
