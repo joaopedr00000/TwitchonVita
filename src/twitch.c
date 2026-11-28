@@ -1265,7 +1265,10 @@ int twitch_vod_variants(const char *id,const char *oauth,m3u8_variant_t *out,int
     }
     LOGI("vod: signed v2 master playlist HTTP 200 bytes=%u",(unsigned)b.size);
     n=m3u8_parse_master((const char*)b.data,out,max);
-    if(n<=0)n=-1;
+    if(n<=0){
+        if(!strcmp(twitch_vod_rejection((const char*)b.data),"SUBSCRIPTION"))snprintf(err,errlen,"%s",twitch_vod_access_message("SUBSCRIPTION"));
+        n=-1;
+    }
 done:
     if(n<0&&!err[0])snprintf(err,errlen,"VOD unavailable / Vídeo indisponível (HTTP %ld)",status);
     curl_slist_free_all(h);buf_free(&b);http_free(c);return n;
