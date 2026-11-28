@@ -108,7 +108,8 @@ static void *hls_thread(void *argp)
     buf_t pl = {0}, seg = {0};
     static m3u8_media_t media; /* large; only one downloader runs at a time */
     long long next_seq = -1;
-    int vod_index=-1,vod_loaded=0,media_valid=0;
+    int vod_index=-1,vod_loaded=0,media_valid=0,vod_sequence_known=0;
+    long long vod_sequence=0;
     int fails = 0, segment_failures = 0, ad_probed = 0;
     unsigned long long last_new = sceKernelGetProcessTimeWide();
     long status = 0;
@@ -130,11 +131,33 @@ static void *hls_thread(void *argp)
         goto done;
     }
     while (h->running) {
-        int bad=0;
+        int bad=0,net=0,parsed=0;
         media_valid=0;
-        if(!h->preview_playlist&&(!h->recorded||!vod_loaded))bad=(h->recorded?http_media_get(c,trust,h->url,&pl,&status,&h->abort_req):http_request(c,h->url,NULL,NULL,&pl,&status,&h->abort_req))<0||status!=200;
+        if(!h->preview_playlist&&(!h->recorded||!vod_loaded)){
+            net=h->recorded?http_media_get(c,trust,h->url,&pl,&status,&h->abort_req):http_request(c,h->url,NULL,NULL,&pl,&status,&h->abort_req);
+            bad=net<0||status!=200;
+        }
         const char *playlist=h->preview_playlist?h->preview_playlist:(const char*)pl.data;
-        if(!bad)bad=h->recorded?m3u8_parse_vod(playlist,h->url,&media,vod_index,h->start_seconds)<0:m3u8_parse_media(playlist,h->url,&media)<0;
+        if(!bad){
+            parsed=h->recorded?m3u8_parse_vod(playlist,h->url,&media,vod_index,h->start_seconds):m3u8_parse_media(playlist,h->url,&media);
+            bad=parsed<0;
+            if(h->recorded){
+                LOGI("vod: playlist HTTP %ld parse=%d segments=%d total=%d end=%d bytes=%u",status,parsed,media.count,media.total_segments,media.ended,(unsigned)pl.size);
+                if(vod_sequence_known&&parsed>=0&&media.media_sequence!=vod_sequence){
+                    snprintf(h->error,sizeof(h->error),"VOD playlist window changed; reopen recording");break;
+                }
+                if(parsed>=0&&media.total_segments>0){vod_sequence=media.media_sequence;vod_sequence_known=1;}
+                if(parsed==VOD_PARSE_WAIT){
+                    if(sceKernelGetProcessTimeWide()-last_new>45000000ULL){snprintf(h->error,sizeof(h->error),"VOD waiting for new segments; try again later");break;}
+                    vod_loaded=0;sleep_ms_while_running(h,2000);continue;
+                }
+                if(parsed<0){
+                    const char *why=parsed==VOD_PARSE_RANGE?"byte-range segments unsupported":parsed==VOD_PARSE_KEY?"encrypted playlist unsupported":parsed==VOD_PARSE_MAP?"invalid or unsupported init segment":parsed==VOD_PARSE_EMPTY?"empty recording":parsed==VOD_PARSE_SEEK?"position outside recording":"invalid HLS playlist";
+                    snprintf(h->error,sizeof(h->error),"VOD: %s (HTTP %ld)",why,status);
+                    LOGW("vod: %s",h->error);break;
+                }
+            }
+        }
         media_valid=!bad;
         if (bad) {
             if (!h->running)
@@ -142,7 +165,8 @@ static void *hls_thread(void *argp)
             LOGW("hls: fallo al leer la playlist (HTTP %ld, intento %d)", status, fails + 1);
             if (++fails >= 4 || status == 404 || status == 403 || status == 401) {
                 h->retryable = 1;
-                snprintf(h->error, sizeof(h->error), vt_msg("Stream terminado (HTTP %ld)"), status);
+                if(h->recorded)snprintf(h->error,sizeof(h->error),"VOD playlist download HTTP %ld curl %d",status,-net);
+                else snprintf(h->error, sizeof(h->error), vt_msg("Stream terminado (HTTP %ld)"), status);
                 LOGE("hls: %s", h->error);
                 break;
             }
@@ -150,7 +174,7 @@ static void *hls_thread(void *argp)
             continue;
         }
         fails = 0;
-        if(h->recorded){vod_loaded=1;if(!h->position_ready){h->actual_start=(int)media.first_seconds;h->duration_seconds=(int)media.total_seconds;h->position_ready=1;}}
+        if(h->recorded){vod_loaded=1;if(!h->position_ready){h->actual_start=(int)media.first_seconds;h->position_ready=1;}h->duration_seconds=(int)media.total_seconds;}
 
         if (next_seq < 0) { /* join near the live edge */
             int start = !h->recorded&&media.count > h->live_edge ? media.count - h->live_edge : 0;
@@ -258,7 +282,11 @@ static void *hls_thread(void *argp)
             h->segments_done++;
         }
 
-        if(h->recorded){vod_index=media.first_index+media.count;if(vod_index>=media.total_segments)break;continue;}
+        if(h->recorded){
+            vod_index=media.first_index+media.count;
+            if(vod_index>=media.total_segments){if(media.ended||h->preview_playlist)break;vod_loaded=0;sleep_ms_while_running(h,2000);}
+            continue;
+        }
         if (media.ended) {
             snprintf(h->error, sizeof(h->error), vt_msg("El directo ha terminado"));
             LOGI("hls: la playlist indica fin del directo");

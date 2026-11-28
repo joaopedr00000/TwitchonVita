@@ -46,6 +46,8 @@ int m3u8_parse_master(const char *text, m3u8_variant_t *out, int max);
  * base_url resolves relative segment URIs. Returns 0 on success. */
 int m3u8_parse_media(const char *text, const char *base_url, m3u8_media_t *out);
 
+/* VOD parser results: positive WAIT means the requested position is not yet available. */
+enum { VOD_PARSE_OK=0,VOD_PARSE_WAIT=1,VOD_PARSE_INVALID=-1,VOD_PARSE_RANGE=-2,VOD_PARSE_KEY=-3,VOD_PARSE_MAP=-4,VOD_PARSE_EMPTY=-5,VOD_PARSE_SEEK=-6 };
 int m3u8_parse_vod(const char *text,const char *base_url,m3u8_media_t *out,int first_index,double seek_seconds);
 
 #endif

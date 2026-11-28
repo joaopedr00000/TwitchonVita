@@ -30,6 +30,19 @@ int main(void)
     assert(m3u8_parse_media(pl,"https://example.test/index.m3u8",&media)==0);
     assert(media.count==3 && media.seg[0].is_ad && !media.seg[1].is_ad && !media.seg[2].is_ad);
     assert(m3u8_parse_media(NULL,NULL,&media)<0);
-    puts("PASS Twitch HLS ad markers, date ranges and clean resumption");
+    /* VODs in progress are valid even without ENDLIST; wait at the edge. */
+    const char *vod="#EXTM3U\n#EXT-X-PLAYLIST-TYPE:EVENT\n#EXT-X-MEDIA-SEQUENCE:50\n#EXTINF:5,\na.ts\n#EXTINF:5,\nb.ts\n";
+    assert(m3u8_parse_vod(vod,"https://example.test/index.m3u8",&media,-1,0)==VOD_PARSE_OK);
+    assert(!media.ended&&media.count==2&&media.seg[0].seq==50&&media.total_seconds==10);
+    assert(m3u8_parse_vod(vod,"https://example.test/index.m3u8",&media,2,0)==VOD_PARSE_WAIT);
+    vod="#EXTM3U\n#EXTINF:5,\na.ts\n#EXTINF:5,\nb.ts\n#EXTINF:5,\nc.ts\n#EXT-X-ENDLIST\n";
+    assert(m3u8_parse_vod(vod,"https://example.test/index.m3u8",&media,2,0)==VOD_PARSE_OK);
+    assert(media.ended&&media.count==1&&media.first_seconds==10);
+    assert(m3u8_parse_vod(vod,"https://example.test/index.m3u8",&media,-1,99)==VOD_PARSE_SEEK);
+    assert(m3u8_parse_vod("#EXTM3U\n#EXT-X-KEY:METHOD=AES-128,URI=\"key\"\n#EXTINF:2,\na.ts\n",NULL,&media,-1,0)==VOD_PARSE_KEY);
+    assert(m3u8_parse_vod("#EXTM3U\n#EXTINF:2,\n#EXT-X-BYTERANGE:100@0\na.ts\n",NULL,&media,-1,0)==VOD_PARSE_RANGE);
+    assert(m3u8_parse_vod("<html>error</html>",NULL,&media,-1,0)==VOD_PARSE_INVALID);
+    assert(m3u8_parse_vod("\xEF\xBB\xBF#EXTM3U\n#EXTINF:2,\na.ts\n#EXT-X-ENDLIST\n",NULL,&media,-1,0)==VOD_PARSE_OK);
+    puts("PASS HLS markers, completed/growing VODs and precise parse diagnostics");
     return 0;
 }
