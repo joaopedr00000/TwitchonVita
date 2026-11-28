@@ -84,3 +84,5 @@ Fix misleading sign-in error when Helix channel lookup fails. Public video/clip 
 ### Experimental Clip Editor Test 13
 
 Adds a native duration/end-position editor, title keyboard, preview with audio using existing recorded HLS player, optional repeat, explicit publish/cancel. Live preview uses a bounded in-memory snapshot of recent segment URLs only (no stored media); CDN URLs can expire. Live publishing is server-current, not guaranteed to match the preview, and requires a separate explicit confirmation. VOD preview starts at a segment boundary and stops near the selected end; the API uses the selected exact offset. Direct ordinary MP4 clip playback is still unsupported. Hardware testing pending.
+
+Published clips with an available source VOD and known offset can be previewed through that source's HLS. Direct MP4 and clips without an accessible source are still unsupported. Preview does not need login, but publication does.

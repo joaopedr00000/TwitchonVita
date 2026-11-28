@@ -1039,7 +1039,7 @@ done:
     curl_slist_free_all(h);buf_free(&b);http_free(c);return n;
 }
 int twitch_create_clip(void *arg,volatile int *abort_flag){
-    twitch_clip_job_t *j=arg;buf_t b={0};long status=0;char url[768];
+    twitch_clip_job_t *j=arg;buf_t b={0};long status=0;char url[1024];
     j->confirmed=0;j->id[0]=j->url[0]=0;
     if(!j->oauth[0]){snprintf(j->error,sizeof(j->error),"Sign in / Entre na conta");return -1;}
     if(!numeric_id(j->broadcaster)&&media_user_id(j->login,j->oauth,j->broadcaster,sizeof(j->broadcaster),abort_flag)<0){snprintf(j->error,sizeof(j->error),"Channel unavailable");return -1;}
@@ -1048,8 +1048,8 @@ int twitch_create_clip(void *arg,volatile int *abort_flag){
         if(!numeric_id(j->vod_id)||!numeric_id(j->user_id)||j->offset<j->duration){snprintf(j->error,sizeof(j->error),"Invalid clip range");return -1;}
         CURL *c=http_new();if(!c)return -1;char *title=curl_easy_escape(c,j->title[0]?j->title:"VitaTwitch clip",0);
         if(!title){http_free(c);return -1;}
-        snprintf(url,sizeof(url),"https://api.twitch.tv/helix/videos/clips?broadcaster_id=%s&editor_id=%s&vod_id=%s&vod_offset=%d&duration=%d&title=%s",j->broadcaster,j->user_id,j->vod_id,j->offset,j->duration,title);
-        curl_free(title);http_free(c);
+        int len=snprintf(url,sizeof(url),"https://api.twitch.tv/helix/videos/clips?broadcaster_id=%s&editor_id=%s&vod_id=%s&vod_offset=%d&duration=%d&title=%s",j->broadcaster,j->user_id,j->vod_id,j->offset,j->duration,title);
+        curl_free(title);http_free(c);if(len<0||(size_t)len>=sizeof(url))return -1;
     }else{
         CURL *c=http_new();if(!c)return -1;char *title=curl_easy_escape(c,j->title[0]?j->title:"VitaTwitch clip",0);
         if(!title){http_free(c);return -1;}

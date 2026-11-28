@@ -1719,7 +1719,6 @@ static int clip_preview(const char *login,const twitch_media_t *v,const m3u8_var
     return rc==PLAYER_RECORDING_END?1:0;
 }
 static void clip_dialog(const char *login,const twitch_media_t *v,int pos,const m3u8_variant_t *quality,const m3u8_preview_t *snapshot){
-    if(!g_logged){modal_message("Clips",vt_lang_current()==2?"Entre na conta Twitch para publicar clipes.":"Sign in to publish clips.");return;}
     int total=v?v->seconds:snapshot?snapshot->duration:0;
     if(v&&total<pos)total=pos;
     int end=v?pos:total,duration=end<30?end:30;
@@ -1746,6 +1745,7 @@ static void clip_dialog(const char *login,const twitch_media_t *v,int pos,const 
             if(selected==4)loop=!loop;
             if(selected==6)return;
             if(selected==5){
+                if(!g_logged){modal_message("Clips",vt_lang_current()==2?"Entre na conta Twitch para publicar clipes.":"Sign in to publish clips.");continue;}
                 /* Live endpoint selects the server's current moment, not this preview. */
                 if(!v){
                     int confirmed=0,ready=0;
@@ -1781,7 +1781,17 @@ static void clip_dialog(const char *login,const twitch_media_t *v,int pos,const 
     else if(rc==0)modal_message("Clips",j.error[0]?j.error:"Clip failed");
 }
 static void recorded_play(const twitch_media_t *v){
-    if(!strcmp(v->type,"clip")){modal_message("Clip",vt_lang_current()==2?"Reprodução MP4 de clipes ainda indisponível nesta build.":"MP4 clip playback is not available in this build.");return;}
+    if(!strcmp(v->type,"clip")){
+        if(!v->vod_id[0]||v->offset<0||v->seconds<1||v->offset>604800-v->seconds){modal_message("Clip",vt_lang_current()==2?"Sem gravação de origem disponível; reprodução MP4 direta ainda não suportada.":"Source VOD unavailable; direct MP4 playback not supported yet.");return;}
+        static vod_job_t clip_job;memset(&clip_job,0,sizeof(clip_job));snprintf(clip_job.id,sizeof(clip_job.id),"%s",v->vod_id);snprintf(clip_job.oauth,sizeof(clip_job.oauth),"%s",g_logged?g_auth.access:"");
+        task_t ct={0};if(run_with_spinner(&ct,vod_job_run,&clip_job,vt_lang_current()==2?"Carregando clipe pela gravação...":"Loading clip from source VOD...")<0)return;
+        m3u8_variant_t *options[M3U8_MAX_VARIANTS];int cn=0;
+        for(int i=0;i<clip_job.n;i++)if(!clip_job.v[i].audio_only&&clip_job.v[i].height>0&&clip_job.v[i].height<=720&&!strncmp(clip_job.v[i].url,"https://",8))options[cn++]=&clip_job.v[i];
+        if(!cn){modal_message("Clip",clip_job.err[0]?clip_job.err:"Source VOD unavailable");return;}
+        int cs=vt_profile_pick(options,cn,g_profile);if(cs<0||cs>=cn)cs=0;
+        twitch_media_t source=*v;snprintf(source.id,sizeof(source.id),"%s",v->vod_id);source.seconds=v->offset+v->seconds;
+        clip_preview(v->channel,&source,options[cs],NULL,v->offset,v->offset+v->seconds);return;
+    }
     static vod_job_t j;memset(&j,0,sizeof(j));snprintf(j.id,sizeof(j.id),"%s",v->id);snprintf(j.oauth,sizeof(j.oauth),"%s",g_logged?g_auth.access:"");
     task_t task={0};if(run_with_spinner(&task,vod_job_run,&j,vt_lang_current()==2?"Carregando gravação...":"Loading recording...")<0)return;
     if(j.n<=0){modal_message("VOD",j.err[0]?j.err:"No compatible quality");return;}

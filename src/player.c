@@ -1202,11 +1202,11 @@ int player_run(const player_params_t *pp, char *err, int errlen)
                 if(pressed&SCE_CTRL_TRIANGLE){view.osd=!view.osd;last_draw=0;}
                 if(!pp->preview_end&&(pressed&SCE_CTRL_SQUARE)){ret=PLAYER_CREATE_CLIP;should_exit=1;}
                 if(!pp->preview_end&&pp->seek_requested&&view.recording_duration>0){
-                    int target=-1;
+                    int target=-2147483647;
                     if(pressed&(SCE_CTRL_LTRIGGER|SCE_CTRL_RTRIGGER))target=view.recording_pos+(pressed&SCE_CTRL_RTRIGGER?30:-30);
                     else if(pressed&(SCE_CTRL_LEFT|SCE_CTRL_RIGHT))target=view.recording_pos+(pressed&SCE_CTRL_RIGHT?10:-10);
                     else if(view.osd&&ui_touch_hit(&input,24,SCREEN_H-84,SCREEN_W-48,24))target=(int)((double)(input.touch_x-24)*view.recording_duration/(SCREEN_W-48));
-                    if(target!=-1){if(target<0)target=0;if(target>=view.recording_duration)target=view.recording_duration-1;*pp->seek_requested=target;ret=PLAYER_SEEK;should_exit=1;}
+                    if(target!=-2147483647){if(target<0)target=0;if(target>=view.recording_duration)target=view.recording_duration-1;*pp->seek_requested=target;ret=PLAYER_SEEK;should_exit=1;}
                 }
             }else{
             if(pressed&SCE_CTRL_SELECT){view.menu=!view.menu;view.menu_sel=0;last_draw=0;}
