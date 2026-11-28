@@ -80,3 +80,7 @@ Account follows are read-only. The profile shows existing Twitch follows and off
 ### Experimental Recordings Test 12
 
 Fix misleading sign-in error when Helix channel lookup fails. Public video/clip catalog has a read-only anonymous GraphQL fallback with verified TLS, without sending account credentials. Distinguish HTTP rejection from transport/TLS and catalog errors; Triangle retries. No logout or token changes. Fix Helix percent-prefixed thumbnail placeholders. GraphQL availability remains experimental.
+
+### Experimental Clip Editor Test 13
+
+Adds a native duration/end-position editor, title keyboard, preview with audio using existing recorded HLS player, optional repeat, explicit publish/cancel. Live preview uses a bounded in-memory snapshot of recent segment URLs only (no stored media); CDN URLs can expire. Live publishing is server-current, not guaranteed to match the preview, and requires a separate explicit confirmation. VOD preview starts at a segment boundary and stops near the selected end; the API uses the selected exact offset. Direct ordinary MP4 clip playback is still unsupported. Hardware testing pending.

@@ -839,7 +839,8 @@ static void draw_view(const vslot_t *frame, view_t *vw)
         if(duration>0){float fraction=(float)pos/duration;if(fraction>1)fraction=1;if(fraction<0)fraction=0;vita2d_draw_rectangle(24,SCREEN_H-76,(AW-48)*fraction,6,C_PURPLE);}
         snprintf(line,sizeof(line),"%02d:%02d:%02d / %02d:%02d:%02d",pos/3600,pos/60%60,pos%60,duration/3600,duration/60%60,duration%60);
         ui_text_fit(24,SCREEN_H-43,AW-48,C_WHITE,.94f,line);
-        ui_text_fit(24,SCREEN_H-13,AW-48,C_WHITE,.9f,vt_lang_current()==2?(vw->paused?"Retomar | L/R 30s | SELECT Qualidade | Quadrado Clipe":"Pausa | L/R 30s | SELECT Qualidade | Quadrado Clipe"):(vw->paused?"Resume | L/R 30s | SELECT Quality | Square Clip":"Pause | L/R 30s | SELECT Quality | Square Clip"));
+        if(vw->pp->preview_end)ui_text_fit(24,SCREEN_H-13,AW-48,C_WHITE,.9f,vt_lang_current()==2?"Prévia | Confirmar pausa | Voltar":"Preview | Confirm pause | Back");
+        else ui_text_fit(24,SCREEN_H-13,AW-48,C_WHITE,.9f,vt_lang_current()==2?(vw->paused?"Retomar | L/R 30s | SELECT Qualidade | Quadrado Clipe":"Pausa | L/R 30s | SELECT Qualidade | Quadrado Clipe"):(vw->paused?"Resume | L/R 30s | SELECT Quality | Square Clip":"Pause | L/R 30s | SELECT Quality | Square Clip"));
     }else if(vw->osd){
         char line[160];
         vita2d_draw_rectangle(0, 0, AW, 64, COLOR_OSD_BG);
@@ -1050,7 +1051,7 @@ int player_run(const player_params_t *pp, char *err, int errlen)
         goto out_queues;
     }
     LOGI("startup: start HLS thread");
-    int hls_rc=pp->recorded?hls_start_recorded(&pl->hls,pp->url,&pl->vq,&pl->aq,pp->start_seconds):hls_start(&pl->hls,pp->url,&pl->vq,&pl->aq,vt_profile_edge(pp->profile),pp->login,pp->chat_oauth,pp->width,pp->height,pp->fps,pp->ad_backup_url);
+    int hls_rc=pp->preview_playlist?hls_start_preview(&pl->hls,pp->preview_playlist,&pl->vq,&pl->aq,pp->start_seconds):pp->recorded?hls_start_recorded(&pl->hls,pp->url,&pl->vq,&pl->aq,pp->start_seconds):hls_start_capture(&pl->hls,pp->url,&pl->vq,&pl->aq,vt_profile_edge(pp->profile),pp->login,pp->chat_oauth,pp->width,pp->height,pp->fps,pp->ad_backup_url,pp->live_capture);
     if(hls_rc<0){
         snprintf(err, (size_t)errlen, vt_msg("No se pudo crear el hilo de descarga"));
         LOGE("%s", err);
@@ -1199,8 +1200,8 @@ int player_run(const player_params_t *pp, char *err, int errlen)
                     last_draw=0;
                 }
                 if(pressed&SCE_CTRL_TRIANGLE){view.osd=!view.osd;last_draw=0;}
-                if(pressed&SCE_CTRL_SQUARE){ret=PLAYER_CREATE_CLIP;should_exit=1;}
-                if(pp->seek_requested&&view.recording_duration>0){
+                if(!pp->preview_end&&(pressed&SCE_CTRL_SQUARE)){ret=PLAYER_CREATE_CLIP;should_exit=1;}
+                if(!pp->preview_end&&pp->seek_requested&&view.recording_duration>0){
                     int target=-1;
                     if(pressed&(SCE_CTRL_LTRIGGER|SCE_CTRL_RTRIGGER))target=view.recording_pos+(pressed&SCE_CTRL_RTRIGGER?30:-30);
                     else if(pressed&(SCE_CTRL_LEFT|SCE_CTRL_RIGHT))target=view.recording_pos+(pressed&SCE_CTRL_RIGHT?10:-10);
@@ -1461,6 +1462,7 @@ int player_run(const player_params_t *pp, char *err, int errlen)
                 if(pp->position_seconds)*pp->position_seconds=view.recording_pos;
             }
         }
+        if(pp->preview_end&&view.recording_pos>=pp->preview_end){ret=PLAYER_RECORDING_END;break;}
         if (next >= 0) {
             uint64_t t_draw = sceKernelGetProcessTimeWide();
             draw_view(&vp->slot[next], &view); /* ends with vita2d_wait_rendering_done() */

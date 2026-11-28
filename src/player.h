@@ -25,6 +25,9 @@ typedef struct {
     const char *chat_sender_id;
     int profile;
     int recorded,start_seconds,duration_seconds;
+    int preview_end;
+    const char *preview_playlist;
+    m3u8_preview_t *live_capture;
     int *position_seconds,*seek_requested;
     int auto_quality;
     int has_lower;

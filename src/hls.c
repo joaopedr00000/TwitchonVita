@@ -72,6 +72,34 @@ static void demux_discontinuity(hls_t *h)
     mp4_demux_discontinuity(&h->mp4);
 }
 
+/* Store URL references only, never entire live segments. Called after the
+ * worker is stopped; the snapshot can expire at the CDN. */
+static void live_snapshot(m3u8_preview_t *out,const m3u8_media_t *m,long long next_seq){
+    if(!out)return;out->duration=0;out->text[0]=0;
+    int end=-1;for(int i=0;i<m->count;i++)if(m->seg[i].seq<next_seq)end=i;
+    if(end<0||m->seg[end].is_ad)return;
+    int start=end;double duration=m->seg[end].duration;
+    while(start>0&&duration<60){
+        const m3u8_segment_t *prev=&m->seg[start-1],*cur=&m->seg[start];
+        if(prev->is_ad||cur->discontinuity||prev->seq+1!=cur->seq||duration+prev->duration>65)break;
+        duration+=prev->duration;start--;
+    }
+    if(duration<5)return;
+    size_t used=0;int n=snprintf(out->text,sizeof(out->text),"#EXTM3U\n#EXT-X-TARGETDURATION:%d\n#EXT-X-MEDIA-SEQUENCE:%lld\n",(int)m->target_duration+1,m->seg[start].seq);
+    if(n<0||(size_t)n>=sizeof(out->text))return;used=n;
+    int prev_map=-2;
+    for(int i=start;i<=end;i++){
+        const m3u8_segment_t *s=&m->seg[i];if(strncmp(s->url,"https://",8)||strpbrk(s->url,"\r\n"))goto fail;
+        if(s->map!=prev_map&&s->map>=0){
+            if(s->map>=m->nmap||strncmp(m->map_url[s->map],"https://",8)||strpbrk(m->map_url[s->map],"\r\n\""))goto fail;
+            n=snprintf(out->text+used,sizeof(out->text)-used,"#EXT-X-MAP:URI=\"%s\"\n",m->map_url[s->map]);if(n<0||(size_t)n>=sizeof(out->text)-used)goto fail;used+=n;
+        }prev_map=s->map;
+        n=snprintf(out->text+used,sizeof(out->text)-used,"#EXTINF:%.3f,\n%s\n",(double)s->duration,s->url);if(n<0||(size_t)n>=sizeof(out->text)-used)goto fail;used+=n;
+    }
+    n=snprintf(out->text+used,sizeof(out->text)-used,"#EXT-X-ENDLIST\n");if(n<0||(size_t)n>=sizeof(out->text)-used)goto fail;
+    out->duration=(int)duration;return;
+fail:out->duration=0;out->text[0]=0;
+}
 static void *hls_thread(void *argp)
 {
     hls_t *h = argp;
@@ -80,7 +108,7 @@ static void *hls_thread(void *argp)
     buf_t pl = {0}, seg = {0};
     static m3u8_media_t media; /* large; only one downloader runs at a time */
     long long next_seq = -1;
-    int vod_index=-1,vod_loaded=0;
+    int vod_index=-1,vod_loaded=0,media_valid=0;
     int fails = 0, segment_failures = 0, ad_probed = 0;
     unsigned long long last_new = sceKernelGetProcessTimeWide();
     long status = 0;
@@ -94,8 +122,11 @@ static void *hls_thread(void *argp)
 
     while (h->running) {
         int bad=0;
-        if(!h->recorded||!vod_loaded)bad=http_request(c,h->url,NULL,NULL,&pl,&status,&h->abort_req)<0||status!=200;
-        if(!bad)bad=h->recorded?m3u8_parse_vod((const char*)pl.data,h->url,&media,vod_index,h->start_seconds)<0:m3u8_parse_media((const char*)pl.data,h->url,&media)<0;
+        media_valid=0;
+        if(!h->preview_playlist&&(!h->recorded||!vod_loaded))bad=http_request(c,h->url,NULL,NULL,&pl,&status,&h->abort_req)<0||status!=200;
+        const char *playlist=h->preview_playlist?h->preview_playlist:(const char*)pl.data;
+        if(!bad)bad=h->recorded?m3u8_parse_vod(playlist,h->url,&media,vod_index,h->start_seconds)<0:m3u8_parse_media(playlist,h->url,&media)<0;
+        media_valid=!bad;
         if (bad) {
             if (!h->running)
                 break;
@@ -233,6 +264,7 @@ static void *hls_thread(void *argp)
     }
 
 done:
+    if(!h->recorded&&h->capture&&media_valid)live_snapshot(h->capture,&media,next_seq);
     buf_free(&pl);
     buf_free(&seg);
     http_free(c);
@@ -241,10 +273,11 @@ done:
 }
 
 static int hls_start_mode(hls_t *h, const char *media_url, pktqueue_t *vq, pktqueue_t *aq, int live_edge,
-              const char *channel,const char *oauth,int width,int height,float fps,char *backup_url,int recorded,int start_seconds)
+              const char *channel,const char *oauth,int width,int height,float fps,char *backup_url,int recorded,int start_seconds,const char *preview,m3u8_preview_t *capture)
 {
     memset(h, 0, sizeof(*h));
-    h->recorded=recorded;h->start_seconds=start_seconds;
+    h->recorded=recorded;h->start_seconds=start_seconds;h->preview_playlist=preview;h->capture=capture;
+    if(capture){capture->duration=0;capture->text[0]=0;}
     h->channel=channel;h->oauth=oauth;h->width=width;h->height=height;h->fps=fps;
     h->backup_url=backup_url;
     if(backup_url)backup_url[0]=0;
@@ -274,9 +307,11 @@ static int hls_start_mode(hls_t *h, const char *media_url, pktqueue_t *vq, pktqu
     return 0;
 }
 
-int hls_start(hls_t *h,const char *url,pktqueue_t *vq,pktqueue_t *aq,int edge,const char *channel,const char *oauth,int width,int height,float fps,char *backup){return hls_start_mode(h,url,vq,aq,edge,channel,oauth,width,height,fps,backup,0,0);}
-int hls_start_recorded(hls_t *h,const char *url,pktqueue_t *vq,pktqueue_t *aq,int start){return hls_start_mode(h,url,vq,aq,1,NULL,NULL,0,0,0,NULL,1,start);}
+int hls_start(hls_t *h,const char *url,pktqueue_t *vq,pktqueue_t *aq,int edge,const char *channel,const char *oauth,int width,int height,float fps,char *backup){return hls_start_mode(h,url,vq,aq,edge,channel,oauth,width,height,fps,backup,0,0,NULL,NULL);}
+int hls_start_recorded(hls_t *h,const char *url,pktqueue_t *vq,pktqueue_t *aq,int start){return hls_start_mode(h,url,vq,aq,1,NULL,NULL,0,0,0,NULL,1,start,NULL,NULL);}
 
+int hls_start_capture(hls_t *h,const char *url,pktqueue_t *vq,pktqueue_t *aq,int edge,const char *channel,const char *oauth,int width,int height,float fps,char *backup,m3u8_preview_t *capture){return hls_start_mode(h,url,vq,aq,edge,channel,oauth,width,height,fps,backup,0,0,NULL,capture);}
+int hls_start_preview(hls_t *h,const char *playlist,pktqueue_t *vq,pktqueue_t *aq,int start){return hls_start_mode(h,"https://usher.ttvnw.net/",vq,aq,1,NULL,NULL,0,0,0,NULL,1,start,playlist,NULL);}
 void hls_stop(hls_t *h)
 {
     h->running = 0;

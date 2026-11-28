@@ -4,6 +4,8 @@
 #define M3U8_URL_MAX 2048
 #define M3U8_MAX_VARIANTS 16
 #define M3U8_MAX_SEGMENTS 64
+#define M3U8_PREVIEW_CAP (M3U8_MAX_SEGMENTS*(M3U8_URL_MAX+80)+12000)
+typedef struct {char text[M3U8_PREVIEW_CAP];int duration;} m3u8_preview_t;
 
 typedef struct {
     char name[48];        /* e.g. "720p60", "480p", "1080p60 (source)" */

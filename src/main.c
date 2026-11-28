@@ -45,7 +45,7 @@ int _newlib_heap_size_user = 96 * 1024 * 1024;
 #define SETTINGS_FILE DATA_DIR "/settings.txt"
 #define LOG_FILE      DATA_DIR "/log.txt"
 #define LOG_PREV_FILE DATA_DIR "/log_prev.txt"
-#define APP_VERSION   "1.34-recordings-test12"
+#define APP_VERSION   "1.34-clip-editor-test13"
 
 #define MAX_ITEMS 100
 
@@ -1009,7 +1009,8 @@ static void play_channel(const char *login,const char *display,const char *title
     LOGI("quality flow: fetching %s",play_login);
 }
 
-static void clip_dialog(const char *login,const twitch_media_t *v,int pos);
+static m3u8_preview_t live_capture;
+static void clip_dialog(const char *login,const twitch_media_t *v,int pos,const m3u8_variant_t *quality,const m3u8_preview_t *snapshot);
 static void play_selected(void)
 {
     static char err[256];
@@ -1068,7 +1069,7 @@ static void play_selected(void)
     pp.profile=g_profile;pp.auto_quality=g_auto_quality&&!manual;
     pp.has_lower=vt_profile_lower(play_list,play_count,play_list[sel])>=0;
     pp.diagnostics=g_diag;pp.volume=&g_volume;
-    pp.ad_backup_url=ad_switched?NULL:ad_backup;
+    pp.ad_backup_url=ad_switched?NULL:ad_backup;pp.live_capture=&live_capture;
     LOGI("startup: selected %s %s %dx%d %.0f fps", login, pp.quality, pp.width, pp.height, pp.fps);
     scePowerSetArmClockFrequency(vt_profile_clock(g_profile,pp.height,pp.fps));
     LOGI("startup: entering player");
@@ -1078,7 +1079,7 @@ static void play_selected(void)
     LOGI("quality flow: player returned %d",r);
     scePowerSetArmClockFrequency(333);
     settings_save();
-    if(r==PLAYER_CREATE_CLIP){clip_dialog(login,NULL,0);r=PLAYER_RECONNECT;retries=0;}
+    if(r==PLAYER_CREATE_CLIP){clip_dialog(login,NULL,0,play_list[sel],&live_capture);r=PLAYER_RECONNECT;retries=0;}
     if(r==PLAYER_CHANGE_QUALITY&&requested>=0&&requested<play_count&&requested!=sel){
         rollback=sel;sel=requested;manual=1;retries=0;reductions=0;ad_switched=0;ad_backup[0]=0;
         snprintf(g_pref_quality,sizeof(g_pref_quality),"%s",play_list[sel]->name);
@@ -1706,24 +1707,74 @@ typedef struct {char login[32],oauth[128],err[192];int kind,n;twitch_media_t out
 typedef struct {char id[80],oauth[128],err[192];int n;m3u8_variant_t v[M3U8_MAX_VARIANTS];} vod_job_t;
 static int media_job_run(void *arg,volatile int *abort_flag){media_job_t *j=arg;j->n=twitch_fetch_media(j->login,j->oauth,j->kind,j->out,VT_MEDIA_MAX,j->err,sizeof(j->err),abort_flag);return j->n;}
 static int vod_job_run(void *arg,volatile int *abort_flag){vod_job_t *j=arg;j->n=twitch_vod_variants(j->id,j->oauth,j->v,M3U8_MAX_VARIANTS,j->err,sizeof(j->err),abort_flag);return j->n;}
-static void clip_dialog(const char *login,const twitch_media_t *v,int pos){
-    if(!g_logged){modal_message("Clips",vt_lang_current()==2?"Entre na conta Twitch novamente para autorizar clipes.":"Sign in again to authorize clips.");return;}
-    int duration=30;if(v&&pos<duration)duration=pos;if(duration<5){modal_message("Clips","Minimum clip length: 5s");return;}
+static int clip_preview(const char *login,const twitch_media_t *v,const m3u8_variant_t *q,const m3u8_preview_t *snapshot,int start,int end){
+    if(!q||(!v&&(!snapshot||!snapshot->duration)))return -1;
+    player_params_t pp={0};char err[192]="";int pos=start;
+    pp.recorded=1;pp.start_seconds=start;pp.duration_seconds=v?v->seconds:snapshot->duration;pp.preview_end=end;pp.position_seconds=&pos;
+    pp.preview_playlist=v?NULL:snapshot->text;pp.url=q->url;pp.channel=login;pp.title=v?v->title:"Clip preview";
+    pp.quality=q->name;pp.width=q->width;pp.height=q->height;pp.fps=q->fps;pp.font=ui_font;pp.btn_back=g_btn_back;pp.profile=g_profile;pp.volume=&g_volume;
+    scePowerSetArmClockFrequency(vt_profile_clock(g_profile,pp.height,pp.fps));
+    int rc=player_run(&pp,err,sizeof(err));scePowerSetArmClockFrequency(333);
+    if(rc<0||rc==PLAYER_RECONNECT){modal_message("Preview",err[0]?err:"Preview unavailable");return -1;}
+    return rc==PLAYER_RECORDING_END?1:0;
+}
+static void clip_dialog(const char *login,const twitch_media_t *v,int pos,const m3u8_variant_t *quality,const m3u8_preview_t *snapshot){
+    if(!g_logged){modal_message("Clips",vt_lang_current()==2?"Entre na conta Twitch para publicar clipes.":"Sign in to publish clips.");return;}
+    int total=v?v->seconds:snapshot?snapshot->duration:0;
+    if(v&&total<pos)total=pos;
+    int end=v?pos:total,duration=end<30?end:30;
+    if(!v&&total<5){duration=30;end=30;}
+    if(v&&end<5){modal_message("Clips","Minimum clip length: 5s");return;}
+    int selected=0,loop=0,armed=0;char title[96]="VitaTwitch clip";
     for(;;){
-        ui_input_poll(&g_in);if(g_in.pressed&g_btn_back)return;
-        if(g_in.pressed&SCE_CTRL_LEFT)duration-=5;if(g_in.pressed&SCE_CTRL_RIGHT)duration+=5;
-        if(duration<5)duration=5;if(duration>60)duration=60;if(v&&duration>pos)duration=pos;
-        if(g_in.pressed&g_btn_ok)break;
-        char line[128];snprintf(line,sizeof(line),v?"%d s | %d - %d":"%d s",duration,pos-duration,pos);
-        frame_begin();draw_home();int x,y;draw_modal_box(600,220,&x,&y);
-        ui_text_fit(x+20,y+40,560,C_WHITE,1.2f,vt_lang_current()==2?"Publicar clipe na Twitch":"Publish Twitch clip");
-        ui_text_fit(x+20,y+86,560,C_WHITE,1.05f,line);
-        ui_text_fit(x+20,y+125,560,C_GREY,.9f,vt_lang_current()==2?"Esquerda/direita: duração | X publicar | O voltar":"Left/right: duration | confirm to publish | back");
-        frame_end();
+        ui_input_poll(&g_in);unsigned b=g_in.pressed;
+        if(!(g_in.held&(g_btn_ok|g_btn_back|SCE_CTRL_LTRIGGER))&&!g_in.touch_down)armed=1;
+        if(armed&&(b&g_btn_back))return;
+        if(b&SCE_CTRL_UP)selected=(selected+6)%7;if(b&SCE_CTRL_DOWN)selected=(selected+1)%7;
+        int adjust=(b&SCE_CTRL_RIGHT)?1:(b&SCE_CTRL_LEFT)?-1:0;
+        if(adjust&&selected==0){duration+=adjust*5;if(duration<5)duration=5;if(duration>60)duration=60;if((v||total>=5)&&duration>end)duration=end;}
+        if(adjust&&selected==1&&total>=5){end+=adjust*5;if(end<duration)end=duration;if(end>total)end=total;}
+        int choose=armed&&(b&g_btn_ok);
+        for(int i=0;i<7;i++)if(armed&&ui_touch_hit(&g_in,140,106+i*46,680,42)){selected=i;choose=1;break;}
+        if(choose){
+            armed=0;
+            if(selected==2){char edit[96];if(ime_input("Clip title",title,edit,sizeof(edit),80)&&edit[0])snprintf(title,sizeof(title),"%s",edit);}
+            if(selected==3){
+                if(!v&&total<5)modal_message("Preview",vt_lang_current()==2?"Histórico da live ainda insuficiente.":"Not enough live history.");
+                else {int rc;do{rc=clip_preview(login,v,quality,snapshot,end-duration,end);}while(loop&&rc==1);}
+            }
+            if(selected==4)loop=!loop;
+            if(selected==6)return;
+            if(selected==5){
+                /* Live endpoint selects the server's current moment, not this preview. */
+                if(!v){
+                    int confirmed=0,ready=0;
+                    for(;;){ui_input_poll(&g_in);if(!(g_in.held&(g_btn_ok|g_btn_back))&&!g_in.touch_down)ready=1;
+                        if(ready&&(g_in.pressed&g_btn_back))break;
+                        if(ready&&(g_in.pressed&g_btn_ok)){confirmed=1;break;}
+                        frame_begin();draw_home();int x,y;draw_modal_box(730,240,&x,&y);
+                        ui_text_fit(x+24,y+39,682,C_WHITE,1.1f,vt_lang_current()==2?"Confirmar clipe da live":"Confirm live clip");
+                        wrap_text(x+24,y+85,682,C_GREY,.9f,vt_lang_current()==2?"A Twitch seleciona o momento atual do servidor. O clipe publicado pode ser diferente da prévia. Confirmar ou voltar?":"Twitch selects the current server moment. The published clip may differ from the preview. Confirm or go back?",4);frame_end();}
+                    if(!confirmed){armed=0;continue;}
+                }
+                break;
+            }
+        }
+        frame_begin();draw_home();int x,y;draw_modal_box(720,470,&x,&y);
+        ui_text_fit(140,79,680,C_WHITE,1.18f,vt_lang_current()==2?"Editor de clipes (experimental)":"Clip editor (experimental)");
+        char d[96],range[96],tl[128],lp[64];
+        snprintf(d,sizeof(d),"%s: %d s",vt_lang_current()==2?"Duração":"Duration",duration);
+        snprintf(range,sizeof(range),"%s: %d - %d s",vt_lang_current()==2?"Trecho":"Range",end-duration,end);
+        snprintf(tl,sizeof(tl),"%s: %s",vt_lang_current()==2?"Título":"Title",title);
+        snprintf(lp,sizeof(lp),"%s: %s",vt_lang_current()==2?"Repetir prévia":"Loop preview",loop?"ON":"OFF");
+        const char *labels[]={d,range,tl,vt_lang_current()==2?"Pré-visualizar":"Preview",lp,vt_lang_current()==2?"Publicar":"Publish",vt_lang_current()==2?"Cancelar":"Cancel"};
+        for(int i=0;i<7;i++){int yy=106+i*46;ui_round_rect(140,yy,680,42,5,selected==i?C_PURPLE:C_PANEL);ui_text_fit(154,yy+28,652,C_WHITE,.96f,labels[i]);}
+        ui_text_fit(140,451,680,C_GREY,.78f,vt_lang_current()==2?"Direcional ajusta duração/fim; prévia alinhada ao segmento HLS.":"D-pad adjusts duration/end; preview is HLS segment-aligned.");
+        ui_text_fit(140,475,680,C_GREY,.78f,vt_lang_current()==2?"Confirme Publicar para enviar à Twitch.":"Select Publish to send to Twitch.");frame_end();
     }
     twitch_clip_job_t j={0};snprintf(j.login,sizeof(j.login),"%s",login?login:"");snprintf(j.oauth,sizeof(j.oauth),"%s",g_auth.access);snprintf(j.user_id,sizeof(j.user_id),"%s",g_auth.user_id);
-    j.duration=duration;j.offset=pos;
-    if(v){snprintf(j.vod_id,sizeof(j.vod_id),"%s",v->id);snprintf(j.broadcaster,sizeof(j.broadcaster),"%s",v->broadcaster);snprintf(j.title,sizeof(j.title),"VitaTwitch clip");}
+    j.duration=duration;j.offset=end;snprintf(j.title,sizeof(j.title),"%s",title);
+    if(v){snprintf(j.vod_id,sizeof(j.vod_id),"%s",v->id);snprintf(j.broadcaster,sizeof(j.broadcaster),"%s",v->broadcaster);}
     task_t task={0};int rc=run_with_spinner(&task,twitch_create_clip,&j,vt_lang_current()==2?"Criando clipe na Twitch...":"Creating clip on Twitch...");
     if(j.confirmed)modal_message(vt_lang_current()==2?"Clipe confirmado":"Clip confirmed",j.url);
     else if(j.id[0])modal_message(vt_lang_current()==2?"Clipe ainda não confirmado":"Clip not confirmed",j.url);
@@ -1753,7 +1804,7 @@ static void recorded_play(const twitch_media_t *v){
         if(media_remember(v,pos,0)<0)toast("Could not save playback position");
         if(rc==PLAYER_SEEK)continue;
         if(rc==PLAYER_CHANGE_QUALITY&&requested>=0&&requested<n){sel=requested;continue;}
-        if(rc==PLAYER_CREATE_CLIP){clip_dialog(v->channel,v,pos);continue;}
+        if(rc==PLAYER_CREATE_CLIP){clip_dialog(v->channel,v,pos,q,NULL);continue;}
         if(rc<0||rc==PLAYER_RECONNECT)modal_message("VOD",err[0]?err:"Recording playback failed");
         break;
     }

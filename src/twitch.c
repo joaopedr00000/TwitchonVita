@@ -1050,7 +1050,12 @@ int twitch_create_clip(void *arg,volatile int *abort_flag){
         if(!title){http_free(c);return -1;}
         snprintf(url,sizeof(url),"https://api.twitch.tv/helix/videos/clips?broadcaster_id=%s&editor_id=%s&vod_id=%s&vod_offset=%d&duration=%d&title=%s",j->broadcaster,j->user_id,j->vod_id,j->offset,j->duration,title);
         curl_free(title);http_free(c);
-    }else snprintf(url,sizeof(url),"https://api.twitch.tv/helix/clips?broadcaster_id=%s&duration=%d",j->broadcaster,j->duration);
+    }else{
+        CURL *c=http_new();if(!c)return -1;char *title=curl_easy_escape(c,j->title[0]?j->title:"VitaTwitch clip",0);
+        if(!title){http_free(c);return -1;}
+        int len=snprintf(url,sizeof(url),"https://api.twitch.tv/helix/clips?broadcaster_id=%s&duration=%d&title=%s",j->broadcaster,j->duration,title);
+        curl_free(title);http_free(c);if(len<0||(size_t)len>=sizeof(url))return -1;
+    }
     if(media_request(url,j->oauth,"",&b,&status,abort_flag)<0||status!=202){
         snprintf(j->error,sizeof(j->error),status==401?"Authorize again / Entre novamente (clip scope)":status==403?"Clips blocked or editor permission required":status==404?"Stream or VOD unavailable":"Clip request failed (HTTP %ld)",status);goto done;
     }
