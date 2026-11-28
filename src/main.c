@@ -36,6 +36,7 @@
 #include "ui.h"
 #include "i18n.h"
 #include "ime_utf8.h"
+#include "ime_guard.h"
 #include "playback_policy.h"
 
 int _newlib_heap_size_user = 96 * 1024 * 1024;
@@ -45,7 +46,7 @@ int _newlib_heap_size_user = 96 * 1024 * 1024;
 #define SETTINGS_FILE DATA_DIR "/settings.txt"
 #define LOG_FILE      DATA_DIR "/log.txt"
 #define LOG_PREV_FILE DATA_DIR "/log_prev.txt"
-#define APP_VERSION   "1.34-media-playback-test29"
+#define APP_VERSION   "1.34-media-playback-test30"
 
 #define MAX_ITEMS 100
 
@@ -1075,6 +1076,9 @@ static int run_with_spinner(task_t *t, task_fn fn, void *arg, const char *msg)
     }
 }
 
+static void ime_home_pump(void *ctx){
+    (void)ctx;frame_begin();draw_home();frame_end();
+}
 static int ime_input(const char *title, const char *initial, char *out, size_t cap, int max_len)
 {
     static SceWChar16 title16[64], init16[128], buf16[128];
@@ -1101,24 +1105,25 @@ static int ime_input(const char *title, const char *initial, char *out, size_t c
     param.initialText = init16;
     param.inputTextBuffer = buf16;
 
-    if (sceImeDialogInit(&param) < 0)
-        return 0;
+    int init_rc=vt_ime_open(&param,ime_home_pump,NULL);
+    if(init_rc<0){char msg[160];snprintf(msg,sizeof(msg),"%s [%08X]",vt_msg("Cannot open PS Vita keyboard"),(unsigned)init_rc);toast(msg);return 0;}
 
     for (;;) {
         frame_begin();
         draw_home();
         frame_end();
-        if (sceImeDialogGetStatus() == SCE_COMMON_DIALOG_STATUS_FINISHED)
-            break;
+        SceCommonDialogStatus status=sceImeDialogGetStatus();
+        if(status==SCE_COMMON_DIALOG_STATUS_FINISHED)break;
+        if(status==SCE_COMMON_DIALOG_STATUS_NONE){vt_ime_close(ime_home_pump,NULL);return 0;}
     }
 
     SceImeDialogResult res;
     memset(&res, 0, sizeof(res));
-    sceImeDialogGetResult(&res);
-    sceImeDialogTerm();
+    int result_rc=sceImeDialogGetResult(&res);
+    vt_ime_close(ime_home_pump,NULL);
     ui_input_poll(&g_in); /* swallow the button that closed the dialog */
 
-    if (res.button != SCE_IME_DIALOG_BUTTON_ENTER)
+    if (result_rc<0 || res.button != SCE_IME_DIALOG_BUTTON_ENTER)
         return 0;
     size_t n = vt_utf16_to_utf8(out,cap,(const uint16_t*)buf16,128);
     /* trim */
