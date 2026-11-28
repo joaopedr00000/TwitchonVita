@@ -50,6 +50,7 @@ typedef struct {
 #define PLAYER_SEEK 5
 #define PLAYER_RECORDING_END 6
 #define PLAYER_CREATE_CLIP 7
+#define PLAYER_CHANNEL_VIDEOS 8
 int player_run(const player_params_t *pp, char *err, int errlen);
 
 #endif

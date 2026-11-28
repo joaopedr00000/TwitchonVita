@@ -21,7 +21,11 @@ CURLcode vt_tls_install_ca(void *ctx)
             X509_INFO *item=sk_X509_INFO_value(info,i);
             if(item->x509){
                 if(X509_STORE_add_cert(store,item->x509)==1)count++;
-                else {failed=1;break;}
+                else {
+                    unsigned long e=ERR_peek_last_error();
+                    if(ERR_GET_LIB(e)==ERR_LIB_X509&&ERR_GET_REASON(e)==X509_R_CERT_ALREADY_IN_HASH_TABLE){ERR_clear_error();continue;}
+                    failed=1;break;
+                }
             }
         }
     }
@@ -31,11 +35,13 @@ CURLcode vt_tls_install_ca(void *ctx)
     SSL_CTX_set_cert_store((SSL_CTX*)ctx,store);
     return CURLE_OK;
 }
+#ifndef __vita__
 static CURLcode trust_callback(CURL *c,void *ctx,void *unused)
 {
     (void)c;(void)unused;
     return vt_tls_install_ca(ctx);
 }
+#endif
 CURLcode vt_tls_configure(CURL *c)
 {
     if(!c||sizeof(vt_ca_bundle)<2)return CURLE_SSL_CACERT_BADFILE;
@@ -46,9 +52,19 @@ CURLcode vt_tls_configure(CURL *c)
 #define OPT(k,v) do{rc=curl_easy_setopt(c,k,v);if(rc!=CURLE_OK)return rc;}while(0)
     OPT(CURLOPT_SSL_VERIFYPEER,1L);
     OPT(CURLOPT_SSL_VERIFYHOST,2L);
+#ifdef __vita__
+    /* Curl can fail with 77 before the SSL context callback when its
+     * compiled-in CA path does not exist on Vita. Use the packaged file. */
+    FILE *ca=fopen("app0:ca/cacert.pem","rb");
+    if(!ca)return CURLE_SSL_CACERT_BADFILE;
+    fclose(ca);
+    OPT(CURLOPT_CAINFO,"app0:ca/cacert.pem");
+    OPT(CURLOPT_CAPATH,(char*)NULL);
+#else
     OPT(CURLOPT_CAINFO,(char*)NULL);
     OPT(CURLOPT_CAPATH,(char*)NULL);
     OPT(CURLOPT_SSL_CTX_FUNCTION,trust_callback);
+#endif
     OPT(CURLOPT_SSL_SESSIONID_CACHE,0L);
     OPT(CURLOPT_FRESH_CONNECT,1L);
 #undef OPT

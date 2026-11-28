@@ -933,8 +933,8 @@ static void draw_view(const vslot_t *frame, view_t *vw)
             (vw->follow_status==TW_FOLLOW_LOCAL_ERROR||vw->follow_status==TW_FOLLOW_LOCAL_REMOVED)?twitch_follow_notice(vw->follow_status):
             saved?twitch_follow_label(0,1):vw->follow_busy?vt_tr(VT_I_LOADING):vw->follow_state==1?twitch_follow_notice_detail(TW_FOLLOW_ALREADY):"";
         ui_text_fit(x+24,y+294,w-48,C_GREY,.8f,detail);
-        const char *labels[]={vw->pp->saved_label?vw->pp->saved_label(saved):"Save on Vita",vt_tr(VT_I_BACK)};
-        for(int i=0;i<2;i++){
+        const char *labels[]={vw->pp->saved_label?vw->pp->saved_label(saved):"Save on Vita",vt_lang_current()==2?"Vídeos e clipes":vt_lang_current()==1?"Vídeos y clips":"Videos and clips",vt_tr(VT_I_BACK)};
+        for(int i=0;i<3;i++){
             int yy=y+310+i*44;ui_round_rect(x+24,yy,w-48,41,5,i==vw->profile_sel?C_PURPLE:C_PANEL);
             ui_text_fit(x+38,yy+26,w-76,C_WHITE,.93f,labels[i]);
         }
@@ -1148,11 +1148,12 @@ int player_run(const player_params_t *pp, char *err, int errlen)
             int choose=!!(pressed&accept);
             if(pressed&(pp->btn_back|SCE_CTRL_START|SCE_CTRL_SELECT)){view.profile_open=0;choose=0;}
             else {
-                if(pressed&SCE_CTRL_UP)view.profile_sel=(view.profile_sel+1)%2;
-                if(pressed&SCE_CTRL_DOWN)view.profile_sel=(view.profile_sel+1)%2;
-                for(int i=0;i<2;i++)if(ui_touch_hit(&input,116,342+i*44,728,41)){view.profile_sel=i;choose=1;break;}
+                if(pressed&SCE_CTRL_UP)view.profile_sel=(view.profile_sel+2)%3;
+                if(pressed&SCE_CTRL_DOWN)view.profile_sel=(view.profile_sel+1)%3;
+                for(int i=0;i<3;i++)if(ui_touch_hit(&input,116,342+i*44,728,41)){view.profile_sel=i;choose=1;break;}
                 if(choose){
-                    if(view.profile_sel==1)view.profile_open=0;
+                    if(view.profile_sel==2)view.profile_open=0;
+                    else if(view.profile_sel==1){ret=PLAYER_CHANNEL_VIDEOS;should_exit=1;}
                     else if(view.profile_sel==0){
                         int saved=pp->saved_has&&pp->saved_has(pp->login);
                         const char *avatar=follow_job.avatar[0]?follow_job.avatar:pp->profile_avatar;
