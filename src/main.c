@@ -45,7 +45,7 @@ int _newlib_heap_size_user = 96 * 1024 * 1024;
 #define SETTINGS_FILE DATA_DIR "/settings.txt"
 #define LOG_FILE      DATA_DIR "/log.txt"
 #define LOG_PREV_FILE DATA_DIR "/log_prev.txt"
-#define APP_VERSION   "1.34-discovery-test6"
+#define APP_VERSION   "1.34-discovery-test7"
 
 #define MAX_ITEMS 100
 
@@ -113,7 +113,7 @@ typedef enum { LS_EMPTY, LS_LOADING, LS_READY, LS_ERROR } list_state_t;
 
 typedef struct {
     twitch_list_t kind;
-    char query[64];
+    char query[256];
     char oauth[64];
     twitch_stream_t out[MAX_ITEMS];
     int n;
@@ -136,9 +136,9 @@ typedef struct {
 static tab_t g_tabs[TAB_COUNT];
 static int g_tab = TAB_EXPLORE;
 static int g_side_focus = -1;
-static char g_game_filter[96],g_game_id[32];
+static char g_game_filter[96],g_game_id[32],g_game_slug[128];
 static void explore_query(char *out,size_t cap){
-    if(g_game_id[0])snprintf(out,cap,"%s|%s",g_game_id,region_code());
+    if(g_game_id[0])snprintf(out,cap,"%s|%s|%s",g_game_id,region_code(),g_game_slug);
     else snprintf(out,cap,"%s",region_code());
 }
 
@@ -285,7 +285,7 @@ static void tabs_update(void)
             continue;
         tb->busy = 0;
         if(t==TAB_FOLLOWED&&(!g_logged||tb->job.kind!=(g_follow_offline?TW_LIST_ALL_FOLLOWS:TW_LIST_FOLLOWED))){tb->count=0;tb->state=LS_EMPTY;tab_load(t);continue;}
-        if(t==TAB_EXPLORE){char expected[64];explore_query(expected,sizeof(expected));if(strcmp(tb->job.query,expected)){tb->state=LS_EMPTY;tb->count=0;tab_load(t);continue;}}
+        if(t==TAB_EXPLORE){char expected[256];explore_query(expected,sizeof(expected));if(strcmp(tb->job.query,expected)){tb->state=LS_EMPTY;tb->count=0;tab_load(t);continue;}}
         if (tb->job.n >= 0)
             LOGI("%s: %d canales", tab_name(t), tb->job.n);
         else if (tb->job.n == -2)
@@ -1256,7 +1256,7 @@ static void language_screen(void)
                 }
         }
         if(choose) {
-            vt_lang_set(sel);g_game_filter[0]=g_game_id[0]=0;
+            vt_lang_set(sel);g_game_filter[0]=g_game_id[0]=g_game_slug[0]=0;
             if(g_region==0){g_tabs[TAB_EXPLORE].count=0;g_tabs[TAB_EXPLORE].state=LS_EMPTY;tab_load(TAB_EXPLORE);}
             settings_save();
             LOGI("ui language selected: %s",vt_lang_code(sel));
@@ -1300,7 +1300,7 @@ static void region_screen(void)
         if(g_in.touch_dragged && g_in.touch_dy>18 && sel>0)sel--;
         if(g_in.touch_dragged && g_in.touch_dy<-18 && sel<REGION_COUNT-1)sel++;
         if(choose){
-            g_region=sel;g_game_filter[0]=g_game_id[0]=0;settings_save();
+            g_region=sel;g_game_filter[0]=g_game_id[0]=g_game_slug[0]=0;settings_save();
             tab_t *tb=&g_tabs[TAB_EXPLORE];
             tb->count=0;tb->sel=0;tb->scroll=0;tb->state=LS_EMPTY;
             tab_load(TAB_EXPLORE);
@@ -1586,9 +1586,9 @@ static void open_selected(void)
 static void home_switch(int t)
 {
     g_tab=t;g_side_focus=-1;g_touch_manual_scroll=0;
-    if(t!=TAB_EXPLORE)g_game_filter[0]=g_game_id[0]=0;
+    if(t!=TAB_EXPLORE)g_game_filter[0]=g_game_id[0]=g_game_slug[0]=0;
     tab_t *tb=&g_tabs[t];tb->scroll=0;tb->sel=t==TAB_SEARCH?-1:home_index(tb,0);
-    if(t==TAB_EXPLORE){char expected[64];explore_query(expected,sizeof(expected));if(strcmp(tb->job.query,expected)){tb->state=LS_EMPTY;tb->count=0;}}
+    if(t==TAB_EXPLORE){char expected[256];explore_query(expected,sizeof(expected));if(strcmp(tb->job.query,expected)){tb->state=LS_EMPTY;tb->count=0;}}
     if(tb->state==LS_EMPTY||tb->state==LS_ERROR)tab_load(t);
 }
 
@@ -1606,7 +1606,7 @@ static int categories_run(void *arg,volatile int *abort_flag){
 static const char *category_note(int remote){
     int l=vt_lang_current();
     if(remote)return l==2?"Categorias populares da Twitch":l==1?"Categorías populares de Twitch":"Top Twitch categories";
-    return l==2?"Categorias das lives carregadas (entre na conta para ver todas)":l==1?"Categorías de directos cargados (inicia sesión para ver todas)":"Categories from loaded streams (sign in for full catalog)";
+    return l==2?"Catálogo indisponível: categorias das lives carregadas":l==1?"Catálogo no disponible: categorías de directos cargados":"Directory unavailable: categories from loaded streams";
 }
 static void games_screen(void)
 {
@@ -1614,7 +1614,7 @@ static void games_screen(void)
     memset(&category_job,0,sizeof(category_job));category_job.n=-1;
     snprintf(category_job.oauth,sizeof(category_job.oauth),"%s",g_logged?g_auth.access:"");
     task_t task={0};
-    if(g_logged&&run_with_spinner(&task,categories_run,&category_job,vt_tr(VT_I_LOADING))<0){
+    if(run_with_spinner(&task,categories_run,&category_job,vt_tr(VT_I_LOADING))<0){
         if(task.busy||!task_done(&task)){task_cancel(&task);while(!task_done(&task))sceKernelDelayThread(10000);}return;
     }
     int remote=category_job.n>0,n=remote?category_job.n:0,sel=0;
@@ -1622,7 +1622,7 @@ static void games_screen(void)
         for(int i=0;i<tb->count&&n<60;i++){
             if(!tb->items[i].game[0])continue;
             int seen=0;for(int j=0;j<n;j++)if(!strcmp(category_job.items[j].name,tb->items[i].game)){seen=1;break;}
-            if(!seen){twitch_category_t *g=&category_job.items[n++];memset(g,0,sizeof(*g));snprintf(g->name,sizeof(g->name),"%s",tb->items[i].game);}
+            if(!seen){twitch_category_t *g=&category_job.items[n++];memset(g,0,sizeof(*g));snprintf(g->name,sizeof(g->name),"%s",tb->items[i].game);twitch_category_cover(g->name,g->art,sizeof(g->art));}
         }
     }
     if(!n){toast(category_note(0));return;}
@@ -1652,6 +1652,7 @@ static void games_screen(void)
             twitch_category_t *g=&category_job.items[sel];
             snprintf(g_game_filter,sizeof(g_game_filter),"%s",g->name);
             snprintf(g_game_id,sizeof(g_game_id),"%s",g->id);
+            snprintf(g_game_slug,sizeof(g_game_slug),"%s",g->slug);
             home_switch(TAB_EXPLORE);return;
         }
         sceKernelPowerTick(SCE_KERNEL_POWER_TICK_DISABLE_AUTO_SUSPEND);
@@ -1672,7 +1673,7 @@ static void games_screen(void)
         for(int j=first+cols*rows;j<n&&j<first+cols*rows+cols;j++)if(category_job.items[j].art[0])img_prefetch(category_job.items[j].art);
         ui_hint(x+25,y+h-18,g_back_name,vt_tr(VT_I_BACK));
         ui_hint_bounded(x+180,y+h-18,360,"□",vt_lang_current()==2?"Favoritar / remover":"Favorite / remove");
-        char page[64];snprintf(page,sizeof(page),"L/R   %d / %d",first/(cols*rows)+1,(n+cols*rows-1)/(cols*rows));
+        char page[64];snprintf(page,sizeof(page),"%d | L/R %d/%d",n,first/(cols*rows)+1,(n+cols*rows-1)/(cols*rows));
         ui_text_fit(x+w-200,y+h-18,176,C_GREY,.8f,page);
         frame_end();
     }
@@ -1684,7 +1685,7 @@ static void side_open(int i)
     case 1:home_switch(TAB_SEARCH);break;
     case 2:home_switch(TAB_FOLLOWED);break;
     case 3:games_screen();break;
-    case 4:g_game_filter[0]=g_game_id[0]=0;home_switch(TAB_EXPLORE);break;
+    case 4:g_game_filter[0]=g_game_id[0]=g_game_slug[0]=0;home_switch(TAB_EXPLORE);break;
     case 5:extras_menu();break;
     }
 }
@@ -1734,7 +1735,7 @@ int main(void)
             profile_selected();continue;
         }
         if (p & (SCE_CTRL_LTRIGGER | SCE_CTRL_RTRIGGER)) {
-            g_game_filter[0]=g_game_id[0]=0;
+            g_game_filter[0]=g_game_id[0]=g_game_slug[0]=0;
             home_switch((g_tab+(p&SCE_CTRL_RTRIGGER?1:TAB_COUNT-1))%TAB_COUNT);
             continue;
         }

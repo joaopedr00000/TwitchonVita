@@ -30,5 +30,9 @@ int main(void){
     int count=0,more=0;char cursor[64],err[128];
     assert(twitch_parse_follows_all("{\"data\":{\"currentUser\":{\"follows\":{\"edges\":[{\"cursor\":\"a\",\"node\":{\"login\":\"offline\",\"displayName\":\"Offline\",\"stream\":null}}],\"pageInfo\":{\"hasNextPage\":false}}}}}",s,2,&count,cursor,sizeof(cursor),&more,err,sizeof(err))==0);
     assert(count==1&&!s[0].live&&!strcmp(s[0].login,"offline"));
+    assert(twitch_parse_gql_categories("{\"data\":{\"games\":{\"edges\":[{\"node\":{\"id\":\"123\",\"name\":\"Just Chatting\",\"slug\":\"just-chatting\",\"displayName\":\"Just Chatting\",\"boxArtURL\":\"https://example.com/cover.jpg\"}}]}}}",g,2)==1);
+    assert(!strcmp(g[0].slug,"just-chatting")&&!strcmp(g[0].art,"https://example.com/cover.jpg"));
+    twitch_category_cover("Just Chatting",g[0].art,sizeof(g[0].art));
+    assert(!strcmp(g[0].art,"https://static-cdn.jtvnw.net/ttv-boxart/Just%20Chatting-144x192.jpg"));
     return 0;
 }

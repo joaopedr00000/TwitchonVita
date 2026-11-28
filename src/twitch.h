@@ -29,7 +29,9 @@ typedef struct {
     int live;
 } twitch_stream_t;
 
-typedef struct {char id[32],name[96],art[192];} twitch_category_t;
+typedef struct {char id[32],name[96],art[192],slug[128];} twitch_category_t;
+void twitch_category_cover(const char *name,char *out,size_t cap);
+int twitch_parse_gql_categories(const char *json,twitch_category_t *out,int max);
 int twitch_parse_categories(const char *json,twitch_category_t *out,int max);
 int twitch_parse_category_streams(const char *json,twitch_stream_t *out,int max);
 

@@ -224,6 +224,43 @@ static void category_image_url(const char *src,char *out,size_t cap,int w,int h)
     }
     out[n]=0;
 }
+void twitch_category_cover(const char *name,char *out,size_t cap)
+{
+    if(!out||!cap)return;
+    out[0]=0;if(!name||!*name)return;
+    static const char prefix[]="https://static-cdn.jtvnw.net/ttv-boxart/";
+    static const char suffix[]="-144x192.jpg";
+    static const char hex[]="0123456789ABCDEF";
+    size_t n=sizeof(prefix)-1;
+    if(n+sizeof(suffix)>=cap)return;
+    memcpy(out,prefix,n);
+    for(const unsigned char *s=(const unsigned char*)name;*s;s++){
+        int plain=(*s>='a'&&*s<='z')||(*s>='A'&&*s<='Z')||(*s>='0'&&*s<='9')||*s=='-'||*s=='_'||*s=='.'||*s=='~';
+        if(n+(plain?1:3)+sizeof(suffix)>cap){out[0]=0;return;}
+        if(plain)out[n++]=(char)*s;
+        else{out[n++]='%';out[n++]=hex[*s>>4];out[n++]=hex[*s&15];}
+    }
+    memcpy(out+n,suffix,sizeof(suffix));
+}
+int twitch_parse_gql_categories(const char *json,twitch_category_t *out,int max)
+{
+    if(!json||!out||max<0)return -1;
+    json_t *root=json_parse(json),*edges=json_path(root,"data.games.edges");
+    if(!edges||edges->type!=JSON_ARRAY){json_free(root);return -1;}
+    int n=0;
+    for(json_t *e=edges->child;e&&n<max;e=e->next){
+        json_t *v=json_get(e,"node");
+        const char *id=json_str(v,"id",""),*name=json_str(v,"name","");
+        const char *display=json_str(v,"displayName",name);
+        if(!*id||strlen(id)>=sizeof(out[n].id)||strlen(id)!=strspn(id,"0123456789")||!*name)continue;
+        twitch_category_t *g=&out[n++];memset(g,0,sizeof(*g));
+        copy_str(g->id,sizeof(g->id),id);copy_str(g->name,sizeof(g->name),*display?display:name);
+        copy_str(g->slug,sizeof(g->slug),json_str(v,"slug",""));
+        category_image_url(json_str(v,"boxArtURL",""),g->art,sizeof(g->art),144,192);
+        if(!g->art[0])twitch_category_cover(name,g->art,sizeof(g->art));
+    }
+    json_free(root);return n;
+}
 int twitch_parse_categories(const char *json,twitch_category_t *out,int max)
 {
     if(!json||!out||max<0)return -1;
@@ -236,6 +273,7 @@ int twitch_parse_categories(const char *json,twitch_category_t *out,int max)
         twitch_category_t *g=&out[n++];memset(g,0,sizeof(*g));
         copy_str(g->id,sizeof(g->id),id);copy_str(g->name,sizeof(g->name),name);
         category_image_url(json_str(v,"box_art_url",""),g->art,sizeof(g->art),144,192);
+        if(!g->art[0])twitch_category_cover(name,g->art,sizeof(g->art));
     }
     json_free(root);return n;
 }
@@ -326,8 +364,8 @@ int twitch_parse_list(const char *json, twitch_list_t kind, twitch_stream_t *out
     case TW_LIST_TOP:
         edges = json_path(root, "data.streams.edges");
         break;
-    case TW_LIST_ALL_FOLLOWS:
-    case TW_LIST_CATEGORY: break;
+    case TW_LIST_ALL_FOLLOWS: break;
+    case TW_LIST_CATEGORY: edges=json_path(root,"data.game.streams.edges");break;
     case TW_LIST_SEARCH:
         edges = json_path(root, "data.searchFor.channels.edges");
         break;
@@ -341,7 +379,7 @@ int twitch_parse_list(const char *json, twitch_list_t kind, twitch_stream_t *out
     for (json_t *e = edges ? edges->child : NULL; e && n < max; e = e->next) {
         twitch_stream_t *s = &out[n];
         memset(s, 0, sizeof(*s));
-        if (kind == TW_LIST_TOP) {
+        if (kind == TW_LIST_TOP || kind == TW_LIST_CATEGORY) {
             json_t *node = json_get(e, "node");
             json_t *b = json_get(node, "broadcaster");
             if (!b || b->type != JSON_OBJECT)
@@ -613,35 +651,68 @@ int twitch_fetch_channel_bio(const char *login,char *bio,size_t cap,volatile int
 
 int twitch_fetch_categories(const char *oauth,twitch_category_t *out,int max,volatile int *abort_flag)
 {
-    if(!oauth||!*oauth)return -2;
-    twitch_follow_job_t auth={0};snprintf(auth.oauth,sizeof(auth.oauth),"%s",oauth);
+    if(!out||max<=0)return -1;
     buf_t resp={0};int n=-1;
-    if(follow_request("https://api.twitch.tv/helix/games/top?first=60",NULL,&auth,1,&resp,abort_flag)==0)
-        n=twitch_parse_categories((const char*)resp.data,out,max);
-    buf_free(&resp);return n;
+    if(oauth&&*oauth){
+        twitch_follow_job_t auth={0};snprintf(auth.oauth,sizeof(auth.oauth),"%s",oauth);
+        if(follow_request("https://api.twitch.tv/helix/games/top?first=60",NULL,&auth,1,&resp,abort_flag)==0)
+            n=twitch_parse_categories((const char*)resp.data,out,max);
+        buf_free(&resp);
+    }
+    if(n>0)return n;
+    /* Public directory, independent of the regional live stream list.
+       Read only; no account token in the anonymous compatibility path. */
+    const char *bodies[]={
+        "{\"query\":\"query { games(first: 60) { edges { node { id name displayName slug boxArtURL(width:144,height:192) } } } }\"}",
+        "{\"query\":\"query { games(first: 60) { edges { node { id name displayName slug } } } }\"}"
+    };
+    char err[160];
+    for(int i=0;i<2&&n<=0&&!(abort_flag&&*abort_flag);i++){
+        buf_t b={0};
+        if(twitch_gql(bodies[i],NULL,&b,err,sizeof(err),abort_flag)==0)
+            n=twitch_parse_gql_categories((const char*)b.data,out,max);
+        buf_free(&b);
+        LOGI("categories: anonymous directory attempt=%d count=%d",i+1,n);
+    }
+    return n;
 }
 static int fetch_category_streams(const char *query,const char *oauth,twitch_stream_t *out,int max,volatile int *abort_flag)
 {
-    if(!oauth||!*oauth||!query)return -2;
-    char id[32],language[16]="",url[192];
+    if(!query)return -1;
+    char id[32],language[16]="",url[192],region[16]="",slug[128]="";
     size_t k=strcspn(query,"|");
     if(!k||k>=sizeof(id))return -1;
     memcpy(id,query,k);id[k]=0;
     if(!numeric_id(id))return -1;
     if(query[k]=='|'){
-        const char *s=query+k+1;
-        static const char *const valid[]={"PT","EN","ES","FR","DE","IT","RU","JA","KO","ZH","ID","TL","NL","PL","TR","UK","SV","AR","TH","VI","OTHER"};
-        for(unsigned i=0;i<sizeof(valid)/sizeof(valid[0]);i++)if(!strcmp(s,valid[i])){
-            snprintf(language,sizeof(language),"%s",!strcmp(s,"OTHER")?"other":s);
-            for(char *p=language;*p;p++)*p=(char)tolower((unsigned char)*p);
-            break;
-        }
-        if(!strcmp(s,"ZH_HK"))snprintf(language,sizeof(language),"zh-hk");
+        const char *s=query+k+1;size_t r=strcspn(s,"|");
+        if(r>=sizeof(region))return -1;
+        memcpy(region,s,r);region[r]=0;
+        if(s[r]=='|')snprintf(slug,sizeof(slug),"%s",s+r+1);
     }
-    snprintf(url,sizeof(url),"https://api.twitch.tv/helix/streams?first=60&game_id=%s%s%s",id,language[0]?"&language=":"",language);
-    twitch_follow_job_t auth={0};snprintf(auth.oauth,sizeof(auth.oauth),"%s",oauth);
-    buf_t resp={0};int n=-1;
-    if(follow_request(url,NULL,&auth,1,&resp,abort_flag)==0)n=twitch_parse_category_streams((const char*)resp.data,out,max);
+    static const char *const valid[]={"PT","EN","ES","FR","DE","IT","RU","JA","KO","ZH","ID","TL","NL","PL","TR","UK","SV","AR","TH","VI","OTHER","ZH_HK"};
+    for(unsigned i=0;i<sizeof(valid)/sizeof(valid[0]);i++)if(!strcmp(region,valid[i])){
+        snprintf(language,sizeof(language),"%s",!strcmp(region,"ZH_HK")?"zh-hk":region);
+        for(char *p=language;*p;p++)*p=(char)tolower((unsigned char)*p);
+        break;
+    }
+    int n=-1;
+    if(oauth&&*oauth){
+        snprintf(url,sizeof(url),"https://api.twitch.tv/helix/streams?first=60&game_id=%s%s%s",id,language[0]?"&language=":"",language);
+        twitch_follow_job_t auth={0};snprintf(auth.oauth,sizeof(auth.oauth),"%s",oauth);
+        buf_t resp={0};
+        if(follow_request(url,NULL,&auth,1,&resp,abort_flag)==0)n=twitch_parse_category_streams((const char*)resp.data,out,max);
+        buf_free(&resp);
+    }
+    if(n>=0||(abort_flag&&*abort_flag))return n;
+    char body[1024],err[160],escaped[256],filter[64]="";
+    if(language[0])snprintf(filter,sizeof(filter),", options: {languages: [%s]}",region);
+    if(slug[0]&&twitch_json_escape(slug,escaped,sizeof(escaped))>=0)
+        snprintf(body,sizeof(body),"{\"query\":\"query G($slug: String!) { game(slug: $slug) { streams(first: 60, sort: VIEWER_COUNT%s) { edges { node { " STREAM_FIELDS " broadcaster { login displayName profileImageURL(width:70) } } } } } }\",\"variables\":{\"slug\":\"%s\"}}",filter,escaped);
+    else
+        snprintf(body,sizeof(body),"{\"query\":\"query { game(id: \\\"%s\\\") { streams(first: 60, sort: VIEWER_COUNT%s) { edges { node { " STREAM_FIELDS " broadcaster { login displayName profileImageURL(width:70) } } } } } }\"}",id,filter);
+    buf_t resp={0};
+    if(twitch_gql(body,NULL,&resp,err,sizeof(err),abort_flag)==0)n=twitch_parse_list((const char*)resp.data,TW_LIST_CATEGORY,out,max,err,sizeof(err));
     buf_free(&resp);return n;
 }
 
