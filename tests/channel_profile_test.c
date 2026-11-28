@@ -27,5 +27,8 @@ int main(void){
     assert(twitch_parse_categories("{\"data\":[{\"id\":\"bad\",\"name\":\"Invalid\"}]}",g,2)==0);
     assert(twitch_parse_category_streams("{\"data\":[{\"user_login\":\"test\",\"user_name\":\"Test\",\"game_name\":\"Game\",\"viewer_count\":17,\"thumbnail_url\":\"https://example.com/{width}x{height}.jpg\"}]}",s,2)==1);
     assert(s[0].live&&s[0].viewers==17&&!strcmp(s[0].preview,"https://example.com/320x180.jpg"));
+    int count=0,more=0;char cursor[64],err[128];
+    assert(twitch_parse_follows_all("{\"data\":{\"currentUser\":{\"follows\":{\"edges\":[{\"cursor\":\"a\",\"node\":{\"login\":\"offline\",\"displayName\":\"Offline\",\"stream\":null}}],\"pageInfo\":{\"hasNextPage\":false}}}}}",s,2,&count,cursor,sizeof(cursor),&more,err,sizeof(err))==0);
+    assert(count==1&&!s[0].live&&!strcmp(s[0].login,"offline"));
     return 0;
 }

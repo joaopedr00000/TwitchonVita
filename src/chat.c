@@ -277,6 +277,41 @@ int chat_load_7tv(const char *json)
     return n;
 }
 
+static int bttv_array(const json_t *list)
+{
+    int n=0;
+    if(!list||list->type!=JSON_ARRAY)return 0;
+    for(json_t *e=list->child;e;e=e->next){
+        const char *name=json_str(e,"code",""),*id=json_str(e,"id",""),*type=json_str(e,"imageType","");
+        if(!*name||!*id||strlen(id)>48||strlen(id)!=strspn(id,"0123456789abcdefABCDEF")||strcmp(type,"png"))continue;
+        char url[128];snprintf(url,sizeof(url),"https://cdn.betterttv.net/emote/%s/1x",id);
+        if(add_emote(name,url,28,28)>=0)n++;
+    }return n;
+}
+int chat_load_bttv(const char *json)
+{
+    json_t *root=json_parse(json);if(!root)return -1;
+    int n=root->type==JSON_ARRAY?bttv_array(root):bttv_array(json_get(root,"channelEmotes"))+bttv_array(json_get(root,"sharedEmotes"));
+    json_free(root);return n;
+}
+int chat_load_ffz(const char *json)
+{
+    json_t *root=json_parse(json);if(!root)return -1;int n=0;
+    json_t *sets=json_get(root,"sets");
+    for(json_t *s=sets?sets->child:NULL;s;s=s->next){
+        json_t *list=json_get(s,"emoticons");
+        for(json_t *e=list?list->child:NULL;e;e=e->next){
+            const char *name=json_str(e,"name",""),*src=json_str(e,"urls.1","");
+            char url[128];int k;
+            if(!strncmp(src,"//cdn.frankerfacez.com/",22))k=snprintf(url,sizeof(url),"https:%s",src);
+            else if(!strncmp(src,"https://cdn.frankerfacez.com/",28))k=snprintf(url,sizeof(url),"%s",src);
+            else continue;
+            if(k<0||(size_t)k>=sizeof(url)||!*name)continue;
+            if(add_emote(name,url,(int)json_num(e,"width",28),(int)json_num(e,"height",28))>=0)n++;
+        }
+    }
+    json_free(root);return n;
+}
 int chat_load_badges(const char *json)
 {
     json_t *root = json_parse(json);
@@ -690,6 +725,23 @@ static void load_7tv(const char *room_id)
         set_status(total > 0 ? vt_msg("Conectado - 7TV: solo globales") : vt_msg("Conectado"));
 }
 
+static void load_extra_emotes(const char *room_id)
+{
+    if(!room_id||!*room_id||strlen(room_id)>24||strlen(room_id)!=strspn(room_id,"0123456789"))return;
+    CURL *c=http_new();if(!c)return;
+    curl_easy_setopt(c,CURLOPT_CONNECTTIMEOUT,3L);curl_easy_setopt(c,CURLOPT_TIMEOUT,5L);
+    char bttv[128],ffz[128];
+    snprintf(bttv,sizeof(bttv),"https://api.betterttv.net/3/cached/users/twitch/%s",room_id);
+    snprintf(ffz,sizeof(ffz),"https://api.frankerfacez.com/v1/room/id/%s",room_id);
+    const char *urls[]={"https://api.betterttv.net/3/cached/emotes/global","https://api.frankerfacez.com/v1/set/global",bttv,ffz};
+    buf_t b={0};long status=0;
+    for(int i=0;i<4&&!C.stop;i++){
+        if(http_request(c,urls[i],NULL,NULL,&b,&status,&C.stop)==0&&status==200&&b.data){
+            int n=i%2?chat_load_ffz((const char*)b.data):chat_load_bttv((const char*)b.data);
+            LOGI("chat: %s static emotes %d",i%2?"FFZ":"BTTV",n);
+        }
+    }buf_free(&b);http_free(c);
+}
 static int abort_cb(void *p, curl_off_t a, curl_off_t b, curl_off_t c, curl_off_t d)
 {
     (void)p; (void)a; (void)b; (void)c; (void)d;
@@ -859,7 +911,7 @@ static void *chat_thread(void *argp)
                 }else if(!C.stop)set_status(vt_msg("Conectado"));
                 /* Anonymous IRC receives the actual broadcast echo; do not fabricate it. */
             }
-            if(room_id[0]&&!emotes_done){emotes_done=1;load_badges(room_id);load_7tv(room_id);}
+            if(room_id[0]&&!emotes_done){emotes_done=1;load_badges(room_id);load_7tv(room_id);load_extra_emotes(room_id);}
             size_t got=0;CURLcode rc=curl_easy_recv(c,rbuf+have,sizeof(rbuf)-1-have,&got);
             if(rc==CURLE_AGAIN){
                 if(sceKernelGetProcessTimeWide()-last_rx>400000000ULL)break;

@@ -78,6 +78,8 @@ int chat_build_msg(const irc_line_t *l, chat_msg_t *m);
 void chat_emotes_reset(void);
 /* Parses a 7TV emote set ("emote_set" of /v3/users/twitch/<id>, or the global set). */
 int chat_load_7tv(const char *json);
+int chat_load_bttv(const char *json);
+int chat_load_ffz(const char *json);
 int chat_emote_count(void);
 const chat_emote_t *chat_emote(int idx);
 int chat_find_emote(const char *word, size_t len);

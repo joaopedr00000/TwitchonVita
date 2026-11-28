@@ -172,6 +172,7 @@ int twitch_build_list_body(twitch_list_t kind, const char *query, char *out, siz
             "{\"query\":\"query { streams(first: 30%s) { edges { node { " STREAM_FIELDS
             " broadcaster { login displayName profileImageURL(width: 70) } } } } }\"}",filter);
     }
+    case TW_LIST_ALL_FOLLOWS:
     case TW_LIST_CATEGORY: return -1; /* Helix path, not GQL */
     case TW_LIST_SEARCH: {
         char q[256];
@@ -325,6 +326,7 @@ int twitch_parse_list(const char *json, twitch_list_t kind, twitch_stream_t *out
     case TW_LIST_TOP:
         edges = json_path(root, "data.streams.edges");
         break;
+    case TW_LIST_ALL_FOLLOWS:
     case TW_LIST_CATEGORY: break;
     case TW_LIST_SEARCH:
         edges = json_path(root, "data.searchFor.channels.edges");
@@ -370,8 +372,8 @@ int twitch_build_follows_body(const char *after, char *out, size_t cap)
         after && after[0] ? "\"" : "", after && after[0] ? cur : "null", after && after[0] ? "\"" : "");
 }
 
-int twitch_parse_follows(const char *json, twitch_stream_t *out, int max, int *n,
-                         char *cursor, size_t cursor_cap, int *has_next, char *err, size_t errlen)
+static int parse_follows_mode(const char *json, twitch_stream_t *out, int max, int *n,
+                         char *cursor, size_t cursor_cap, int *has_next, char *err, size_t errlen,int all)
 {
     char gerr[160];
     json_t *root = json_parse(json);
@@ -399,7 +401,7 @@ int twitch_parse_follows(const char *json, twitch_stream_t *out, int max, int *n
         copy_str(cursor, cursor_cap, json_str(e, "cursor", ""));
         json_t *u = json_get(e, "node");
         json_t *st = json_get(u, "stream");
-        if (!u || u->type != JSON_OBJECT || !st || st->type != JSON_OBJECT || *n >= max)
+        if (!u || u->type != JSON_OBJECT || (!all&&(!st || st->type != JSON_OBJECT)) || *n >= max)
             continue;
         twitch_stream_t *s = &out[*n];
         memset(s, 0, sizeof(*s));
@@ -412,6 +414,12 @@ int twitch_parse_follows(const char *json, twitch_stream_t *out, int max, int *n
     return 0;
 }
 
+int twitch_parse_follows(const char *json,twitch_stream_t *out,int max,int *n,char *cursor,size_t cursor_cap,int *has_next,char *err,size_t errlen){
+    return parse_follows_mode(json,out,max,n,cursor,cursor_cap,has_next,err,errlen,0);
+}
+int twitch_parse_follows_all(const char *json,twitch_stream_t *out,int max,int *n,char *cursor,size_t cursor_cap,int *has_next,char *err,size_t errlen){
+    return parse_follows_mode(json,out,max,n,cursor,cursor_cap,has_next,err,errlen,1);
+}
 static int by_viewers(const void *a, const void *b)
 {
     return ((const twitch_stream_t *)b)->viewers - ((const twitch_stream_t *)a)->viewers;
@@ -548,11 +556,27 @@ static int follow_read(twitch_follow_job_t *j,volatile int *abort_flag)
     }
     buf_free(&resp);return j->state>=0?0:-1;
 }
+static void follow_metadata(twitch_follow_job_t *j,volatile int *abort_flag)
+{
+    if(!numeric_id(j->id))return;
+    j->followers=-1;j->started_at[0]=j->created_at[0]=j->avatar[0]=0;
+    const char *paths[]={"users?id=","channels/followers?first=1&broadcaster_id=","streams?user_id="};
+    for(int i=0;i<3&&!(abort_flag&&*abort_flag);i++){
+        char url[160];snprintf(url,sizeof(url),"https://api.twitch.tv/helix/%s%s",paths[i],j->id);
+        buf_t b={0};if(follow_request(url,NULL,j,1,&b,abort_flag)==0&&b.data){
+            json_t *root=json_parse((const char*)b.data);
+            if(i==0){copy_str(j->created_at,sizeof(j->created_at),json_str(root,"data.0.created_at",""));copy_str(j->avatar,sizeof(j->avatar),json_str(root,"data.0.profile_image_url",""));}
+            else if(i==1){double n=json_num(root,"total",-1);if(n>=0&&n<=2147483647.)j->followers=(int)n;}
+            else copy_str(j->started_at,sizeof(j->started_at),json_str(root,"data.0.started_at",""));
+            json_free(root);
+        }buf_free(&b);
+    }
+}
 int twitch_follow_run(void *arg,volatile int *abort_flag)
 {
     twitch_follow_job_t *j=arg;j->status=4;
     if(follow_read(j,abort_flag)<0)return -1;
-    if(j->desired<0||j->state==j->desired){j->status=3;return 0;}
+    if(j->desired<0||j->state==j->desired){if(j->desired<0)follow_metadata(j,abort_flag);j->status=3;return 0;}
     if(j->state==2||j->desired>1||(abort_flag&&*abort_flag)){j->status=10;return -1;}
     char body[512];
     if(j->desired==1)
@@ -628,6 +652,18 @@ int twitch_fetch_list(twitch_list_t kind, const char *query, const char *oauth,
     char body[1024];
     buf_t resp = {0};
     int n;
+    if(kind==TW_LIST_ALL_FOLLOWS){
+        if(!oauth||!*oauth)return -2;
+        char cursor[256]="",request[1536];int count=0,more=1,rc=0;
+        for(int page=0;page<20&&more&&count<max&&!(abort_flag&&*abort_flag);page++){
+            if(twitch_build_follows_body(cursor,request,sizeof(request))<0||twitch_gql(request,oauth,&resp,err,errlen,abort_flag)<0){rc=-1;break;}
+            rc=twitch_parse_follows_all((const char*)resp.data,out,max,&count,cursor,sizeof(cursor),&more,err,errlen);
+            if(rc<0)break;
+        }
+        buf_free(&resp);
+        if(rc<0&&!count)return rc;
+        twitch_sort_by_viewers(out,count);return count;
+    }
     if(kind==TW_LIST_CATEGORY){
         int r=fetch_category_streams(query,oauth,out,max,abort_flag);
         if(r<0)snprintf(err,errlen,vt_lang_current()==2?"Não foi possível carregar a categoria.":"Could not load category.");

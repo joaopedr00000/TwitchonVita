@@ -56,3 +56,7 @@ Logs: `ux0:data/VitaTwitch/log.txt` and `log_prev.txt`. Share relevant logs only
 ## Credits and license
 
 Original project: [Dexlei/VitaTwitch](https://github.com/Dexlei/VitaTwitch). TLS Fixer: [devnoname120/vita_tls_fixer](https://github.com/devnoname120/vita_tls_fixer). MIT — see [LICENSE](LICENSE).
+
+
+### Experimental 1.34 discovery updates
+Category cover browsing, local category favorites, alternate TV grid, offline follows, profile metadata and static BTTV/FFZ emotes were inspired by [LiveVita by Cecil2121](https://github.com/Cecil2121/livevita) (MIT). These are independent adaptations. The live player remains unchanged; VOD/clip playback is not yet implemented. Native Twitch follow remains experimental and may be rejected by Twitch.

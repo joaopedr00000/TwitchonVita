@@ -45,7 +45,7 @@ int _newlib_heap_size_user = 96 * 1024 * 1024;
 #define SETTINGS_FILE DATA_DIR "/settings.txt"
 #define LOG_FILE      DATA_DIR "/log.txt"
 #define LOG_PREV_FILE DATA_DIR "/log_prev.txt"
-#define APP_VERSION   "1.34-categories-test5"
+#define APP_VERSION   "1.34-discovery-test6"
 
 #define MAX_ITEMS 100
 
@@ -98,6 +98,7 @@ static const char *region_title(void){
 static int g_profile=VT_PROFILE_BALANCED, g_auto_quality=0, g_diag=0, g_volume=100, g_remember=1;
 static unsigned long long g_auth_last_check;
 static int g_touch_manual_scroll = 0;
+static int g_tv_layout=0,g_follow_offline=0;
 
 static ui_input_t g_in;
 static char g_toast[160];
@@ -190,6 +191,8 @@ static void settings_load(void)
         else if (!strncmp(line, "diag=", 5)) g_diag=atoi(line+5)!=0;
         else if (!strncmp(line, "volume=", 7)) {int v=atoi(line+7);if(v>=0&&v<=100)g_volume=v;}
         else if (!strncmp(line, "remember=", 9)) g_remember=atoi(line+9)!=0;
+        else if (!strncmp(line,"tv_layout=",10))g_tv_layout=atoi(line+10)!=0;
+        else if (!strncmp(line,"follow_offline=",15))g_follow_offline=atoi(line+15)!=0;
         else if (!strncmp(line, "touch=", 6))
             ui_touch_enable(atoi(line + 6) != 0);
     }
@@ -207,7 +210,7 @@ static void settings_save(void)
             g_pref_quality, g_search, g_chat_on,
             vt_lang_code(vt_lang_current()), ui_touch_enabled());
     fprintf(f,"profile=%d\nauto_quality=%d\ndiag=%d\nvolume=%d\nremember=%d\n",g_profile,g_auto_quality,g_diag,g_volume,g_remember);
-    fprintf(f,"region=%s\nquality_flow=3\n",region_codes[g_region]);
+    fprintf(f,"region=%s\nquality_flow=3\ntv_layout=%d\nfollow_offline=%d\n",region_codes[g_region],g_tv_layout,g_follow_offline);
     fclose(f);
 }
 
@@ -264,7 +267,7 @@ static void tab_load(int t)
         return;
     }
     list_job_t *j = &tb->job;
-    j->kind = t == TAB_FOLLOWED ? TW_LIST_FOLLOWED : t == TAB_EXPLORE ? (g_game_id[0]?TW_LIST_CATEGORY:TW_LIST_TOP) : TW_LIST_SEARCH;
+    j->kind = t == TAB_FOLLOWED ? (g_follow_offline?TW_LIST_ALL_FOLLOWS:TW_LIST_FOLLOWED) : t == TAB_EXPLORE ? (g_game_id[0]?TW_LIST_CATEGORY:TW_LIST_TOP) : TW_LIST_SEARCH;
     if(t==TAB_EXPLORE)explore_query(j->query,sizeof(j->query));else snprintf(j->query,sizeof(j->query),"%s",g_search);
     snprintf(j->oauth, sizeof(j->oauth), "%s", g_logged ? g_auth.access : "");
     if (task_start(&tb->task, list_job_run, j) == 0) {
@@ -281,6 +284,7 @@ static void tabs_update(void)
         if (!tb->busy || !task_done(&tb->task))
             continue;
         tb->busy = 0;
+        if(t==TAB_FOLLOWED&&(!g_logged||tb->job.kind!=(g_follow_offline?TW_LIST_ALL_FOLLOWS:TW_LIST_FOLLOWED))){tb->count=0;tb->state=LS_EMPTY;tab_load(t);continue;}
         if(t==TAB_EXPLORE){char expected[64];explore_query(expected,sizeof(expected));if(strcmp(tb->job.query,expected)){tb->state=LS_EMPTY;tb->count=0;tab_load(t);continue;}}
         if (tb->job.n >= 0)
             LOGI("%s: %d canales", tab_name(t), tb->job.n);
@@ -371,6 +375,7 @@ static home_rect_t home_rect(int i)
         {224,0,476,266}, {708,0,236,129}, {708,137,236,129},
         {224,274,236,128}, {468,274,232,128}, {708,274,236,128}
     };
+    if(g_tv_layout){home_rect_t r={224+(i%3)*244,(i%6/3)*205+(i/6)*BLOCK_H,236,197};return r;}
     home_rect_t r=tiles[i%6]; r.y+=(i/6)*BLOCK_H; return r;
 }
 
@@ -552,9 +557,9 @@ static void draw_footer(void)
     const char *ok=g_side_focus>=0?side_label(g_side_focus):
         g_tab==TAB_SEARCH&&tb->sel<0?vt_tr(VT_I_SEARCH):vt_tr(VT_I_PLAY);
     const char *btns[]={g_ok_name,"△","□","L/R","SELECT","START"};
-    const char *labels[]={ok,vt_tr(VT_I_REFRESH),vt_msg("Ir al canal exacto"),vt_tr(VT_I_TAB),vt_tr(VT_I_MENU),profile_label(0)};
-    int count=g_tab==TAB_SEARCH?6:5,cell=(SCREEN_W-24)/count,pos=0;
-    for(int i=0;i<6;i++){if(i==2&&g_tab!=TAB_SEARCH)continue;footer_hint(12+pos++*cell,cell,FOOTER_Y+25,btns[i],labels[i]);}
+    const char *labels[]={ok,vt_tr(VT_I_REFRESH),(g_tab==TAB_FOLLOWED?(g_follow_offline?vt_tr(VT_I_LIVE):vt_tr(VT_I_OFFLINE)):vt_msg("Ir al canal exacto")),vt_tr(VT_I_TAB),vt_tr(VT_I_MENU),profile_label(0)};
+    int count=g_tab!=TAB_EXPLORE?6:5,cell=(SCREEN_W-24)/count,pos=0;
+    for(int i=0;i<6;i++){if(i==2&&g_tab==TAB_EXPLORE)continue;footer_hint(12+pos++*cell,cell,FOOTER_Y+25,btns[i],labels[i]);}
 }
 
 static void draw_center_msg(const char *title, const char *msg, int top)
@@ -1325,7 +1330,7 @@ static void region_screen(void)
 static void extras_menu(void)
 {
     /* All entries share the same hit boxes for touch and controller use. */
-    const int x=120,y=18,w=720,h=508,row=35,count=12;
+    const int x=120,y=18,w=720,h=508,row=32,count=13;
     int sel=0;
     for(;;) {
         ui_input_poll(&g_in);
@@ -1351,7 +1356,8 @@ static void extras_menu(void)
                 case 8:g_diag=!g_diag;settings_save();break;
                 case 9:g_remember=!g_remember;if(g_remember&&g_logged)auth_save(&g_auth,AUTH_FILE);else sceIoRemove(AUTH_FILE);settings_save();break;
                 case 10:region_screen();break;
-                case 11:return;
+                case 11:g_tv_layout=!g_tv_layout;g_tabs[g_tab].scroll=0;settings_save();break;
+                case 12:return;
             }
         }
         frame_begin();draw_home();
@@ -1364,12 +1370,13 @@ static void extras_menu(void)
             if(sel==i)vita2d_draw_rectangle(x+14,yy,3,row-3,C_WHITE);
             const char *label=i==0?vt_tr(VT_I_ACCOUNT):i==1?vt_tr(VT_I_LANGUAGE):
                 i==2?vt_tr(VT_I_TOUCH):i==3?vt_tr(VT_I_CHAT):
-                i==4?vt_tr(VT_I_CLEAR_CACHE):i==5?vt_tr(VT_I_ABOUT):i==6?vt_opt(VT_O_PROFILE):i==7?vt_opt(VT_O_AUTO):i==8?vt_opt(VT_O_DIAG):i==9?vt_opt(VT_O_REMEMBER):i==10?region_title():vt_tr(VT_I_CLOSE);
+                i==4?vt_tr(VT_I_CLEAR_CACHE):i==5?vt_tr(VT_I_ABOUT):i==6?vt_opt(VT_O_PROFILE):i==7?vt_opt(VT_O_AUTO):i==8?vt_opt(VT_O_DIAG):i==9?vt_opt(VT_O_REMEMBER):i==10?region_title():i==11?"Layout":vt_tr(VT_I_CLOSE);
             ui_text_fit(x+32,yy+23,w-280,C_WHITE,1.05f,label);
             const char *value=NULL;
             int toggle=i==2||i==3||i==7||i==8||i==9,enabled=0;
             if(i==1)value=vt_lang_name(vt_lang_current());
             if(i==10)value=region_label(g_region);
+            if(i==11)value=g_tv_layout?"TV":"Handheld";
             if(i==6)value=vt_opt((vt_option_id)(VT_O_ECONOMY+g_profile));
             if(toggle){
                 enabled=i==2?ui_touch_enabled():i==3?g_chat_on:i==7?g_auto_quality:i==8?g_diag:g_remember;
@@ -1491,12 +1498,13 @@ static void profile_screen(const twitch_stream_t *s)
     snprintf(follow.user_id,sizeof(follow.user_id),"%s",g_logged?g_auth.user_id:"");
     int follow_busy=follow.oauth[0]&&task_start(&follow_task,twitch_follow_run,&follow)==0;
     int follow_state=-1,follow_status=follow_busy?2:follow.oauth[0]?4:1;
+    int followers=-1;char created[32]="",started[32]="",avatar[192]="";
     int loading=task_start(&task,profile_run,&job)==0,selected=s->live?0:1,armed=0;
     const int x=92,y=32,w=776,h=480,bx=x+24,by=y+310,bw=w-48,rh=44;
     for(;;){
         ui_input_poll(&g_in);
         if(loading&&task_done(&task)){task_wait(&task);loading=0;}
-        if(follow_busy&&task_done(&follow_task)){follow_busy=0;follow_state=follow.state;follow_status=follow.status;}
+        if(follow_busy&&task_done(&follow_task)){follow_busy=0;follow_state=follow.state;follow_status=follow.status;if(follow.desired<0){followers=follow.followers;snprintf(created,sizeof(created),"%s",follow.created_at);snprintf(started,sizeof(started),"%s",follow.started_at);snprintf(avatar,sizeof(avatar),"%s",follow.avatar);}}
         if(!(g_in.held&(g_btn_ok|g_btn_back|SCE_CTRL_START))&&!g_in.touch_down)armed=1;
         if(armed&&(g_in.pressed&(g_btn_back|SCE_CTRL_START)))break;
         int choose=armed&&(g_in.pressed&g_btn_ok);
@@ -1523,7 +1531,7 @@ static void profile_screen(const twitch_stream_t *s)
         frame_begin();draw_home();
         int ox,oy;draw_modal_box(w,h,&ox,&oy);
         ui_text(x+24,y+36,C_WHITE,1.15f,profile_label(0));
-        draw_avatar(s->avatar,s->display,x+24,y+52,76);
+        draw_avatar(avatar[0]?avatar:s->avatar,s->display,x+24,y+52,76);
         ui_text_fit(x+116,y+77,w-142,C_WHITE,1.35f,s->display[0]?s->display:s->login);
         snprintf(line,sizeof(line),"@%s",s->login);
         ui_text_fit(x+116,y+103,w-142,C_GREY,.9f,line);
@@ -1533,6 +1541,7 @@ static void profile_screen(const twitch_stream_t *s)
         ui_text_fit(x+24,y+157,w-48,C_WHITE,.88f,s->title);
         if(loading)ui_text_fit(x+24,y+187,w-48,C_GREY,.85f,vt_tr(VT_I_LOADING));
         else if(job.bio[0])wrap_text(x+24,y+187,w-48,C_GREY,.82f,job.bio,3);
+        if(followers>=0||created[0]||started[0]){snprintf(line,sizeof(line),"%s %d | %s %.10s | %s %.16s UTC",vt_lang_current()==2?"Seguidores":"Followers",followers,vt_lang_current()==2?"Desde":"Since",created,vt_lang_current()==2?"Live desde":"Live since",started);ui_text_fit(x+24,y+251,w-48,C_GREY,.75f,line);}
         ui_text_fit(x+24,y+270,w-48,C_GREY,.75f,twitch_follow_notice(follow_status));
         ui_text_fit(x+24,y+294,w-48,C_GREY,.8f,url);
         const char *labels[]={vt_tr(VT_I_PLAY),follow_busy?vt_tr(VT_I_LOADING):twitch_follow_label(follow_state),vt_tr(VT_I_BACK)};
@@ -1586,6 +1595,11 @@ static void home_switch(int t)
 /* Category browser: Helix box art with local fallback. Inspired by LiveVita (Cecil2121). */
 typedef struct {char oauth[64];twitch_category_t items[60];int n;} category_job_t;
 static category_job_t category_job;
+#define CATEGORY_FAV_FILE DATA_DIR "/categories-favorites.txt"
+static char category_favs[60][32];static int category_fav_n;
+static int category_is_fav(const char *id){for(int i=0;id&&*id&&i<category_fav_n;i++)if(!strcmp(id,category_favs[i]))return 1;return 0;}
+static void category_favs_load(void){category_fav_n=0;FILE *fp=fopen(CATEGORY_FAV_FILE,"r");if(!fp)return;char line[64];while(category_fav_n<60&&fgets(line,sizeof(line),fp)){line[strcspn(line,"\r\n")]=0;if(*line&&strlen(line)<32&&strlen(line)==strspn(line,"0123456789")&&!category_is_fav(line))snprintf(category_favs[category_fav_n++],32,"%s",line);}fclose(fp);}
+static int category_fav_toggle(const char *id){if(!id||!*id)return -1;int at=-1;for(int i=0;i<category_fav_n;i++)if(!strcmp(id,category_favs[i]))at=i;if(at>=0){memmove(category_favs+at,category_favs+at+1,(size_t)(category_fav_n-at-1)*sizeof(category_favs[0]));category_fav_n--;}else if(category_fav_n<60)snprintf(category_favs[category_fav_n++],32,"%s",id);else return -1;FILE *fp=fopen(CATEGORY_FAV_FILE ".tmp","w");if(!fp){category_favs_load();return -1;}int rc=0;for(int i=0;i<category_fav_n;i++)if(fprintf(fp,"%s\n",category_favs[i])<0)rc=-1;if(fclose(fp)!=0)rc=-1;if(!rc&&sceIoRename(CATEGORY_FAV_FILE ".tmp",CATEGORY_FAV_FILE)<0)rc=-1;if(rc<0){sceIoRemove(CATEGORY_FAV_FILE ".tmp");category_favs_load();}return rc;}
 static int categories_run(void *arg,volatile int *abort_flag){
     category_job_t *j=arg;j->n=twitch_fetch_categories(j->oauth,j->items,60,abort_flag);return j->n;
 }
@@ -1612,6 +1626,8 @@ static void games_screen(void)
         }
     }
     if(!n){toast(category_note(0));return;}
+    category_favs_load();
+    for(int i=0,k=0;i<n;i++)if(category_is_fav(category_job.items[i].id)){twitch_category_t g=category_job.items[i];memmove(category_job.items+k+1,category_job.items+k,(size_t)(i-k)*sizeof(g));category_job.items[k++]=g;}
     const int x=76,y=25,w=808,h=494,cols=5,rows=2,cw=150,ch=190;
     int armed=0;
     for(;;){
@@ -1622,6 +1638,7 @@ static void games_screen(void)
         if(g_in.pressed&SCE_CTRL_RIGHT)sel=(sel+1)%n;
         if(g_in.pressed&SCE_CTRL_UP)sel=sel>=cols?sel-cols:sel;
         if(g_in.pressed&SCE_CTRL_DOWN)sel=sel+cols<n?sel+cols:sel;
+        if(g_in.pressed&SCE_CTRL_SQUARE){if(category_fav_toggle(category_job.items[sel].id)<0)toast(vt_lang_current()==2?"Não foi possível salvar":"Could not save");}
         if(g_in.pressed&SCE_CTRL_LTRIGGER)sel=sel>=cols*rows?sel-cols*rows:0;
         if(g_in.pressed&SCE_CTRL_RTRIGGER)sel=sel+cols*rows<n?sel+cols*rows:n-1;
         if(g_in.touch_dragged&&g_in.touch_dy>18&&sel>=cols)sel-=cols;
@@ -1649,10 +1666,12 @@ static void games_screen(void)
             if(art)ui_image(art,xx+18,yy+3,106,142);
             else ui_text_center(xx+71,yy+82,C_GREY,.78f,games_label());
             ui_text_fit(xx+5,yy+165,cw-18,C_WHITE,.78f,g->name);
+            if(category_is_fav(g->id)){vita2d_draw_rectangle(xx+3,yy+3,24,23,C_PURPLE);ui_text_center(xx+15,yy+21,C_WHITE,.85f,"*");}
             if(k==sel)ui_frame(xx,yy,cw-8,ch-6,3,C_WHITE);
         }
         for(int j=first+cols*rows;j<n&&j<first+cols*rows+cols;j++)if(category_job.items[j].art[0])img_prefetch(category_job.items[j].art);
         ui_hint(x+25,y+h-18,g_back_name,vt_tr(VT_I_BACK));
+        ui_hint_bounded(x+180,y+h-18,360,"□",vt_lang_current()==2?"Favoritar / remover":"Favorite / remove");
         char page[64];snprintf(page,sizeof(page),"L/R   %d / %d",first/(cols*rows)+1,(n+cols*rows-1)/(cols*rows));
         ui_text_fit(x+w-200,y+h-18,176,C_GREY,.8f,page);
         frame_end();
@@ -1710,8 +1729,8 @@ int main(void)
         tab_t *tb = &g_tabs[g_tab];
         unsigned p = g_in.pressed;
 
-        int profile_cell=(SCREEN_W-24)/(g_tab==TAB_SEARCH?6:5);
-        if((p&SCE_CTRL_START)||ui_touch_hit(&g_in,12+profile_cell*(g_tab==TAB_SEARCH?5:4),FOOTER_Y,profile_cell,SCREEN_H-FOOTER_Y)){
+        int profile_cell=(SCREEN_W-24)/(g_tab!=TAB_EXPLORE?6:5);
+        if((p&SCE_CTRL_START)||ui_touch_hit(&g_in,12+profile_cell*(g_tab!=TAB_EXPLORE?5:4),FOOTER_Y,profile_cell,SCREEN_H-FOOTER_Y)){
             profile_selected();continue;
         }
         if (p & (SCE_CTRL_LTRIGGER | SCE_CTRL_RTRIGGER)) {
@@ -1743,6 +1762,7 @@ int main(void)
             img_clear(); /* thumbnails are refreshed by Twitch every few minutes */
             tab_load(g_tab);
         }
+        if(g_tab==TAB_FOLLOWED&&(p&SCE_CTRL_SQUARE)){g_follow_offline=!g_follow_offline;settings_save();tb->state=LS_EMPTY;tb->count=0;tab_load(TAB_FOLLOWED);continue;}
         if (g_tab == TAB_SEARCH && (p & SCE_CTRL_SQUARE) && g_search[0]) {
             char login[32];
             if (twitch_sanitize_login(g_search, login, sizeof(login)) >= 3)
