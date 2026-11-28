@@ -107,6 +107,7 @@ static const uint8_t *clip_read(void *ctx,uint64_t off,size_t n){
     clip_reader_t *r=ctx;if(!n||n>CLIP_WINDOW||(r->total&&(off>r->total||n>r->total-off)))return NULL;
     for(int i=0;i<2;i++)if(r->window[i].size&&off>=r->base[i]&&off-r->base[i]<=r->window[i].size&&n<=r->window[i].size-(size_t)(off-r->base[i]))return r->window[i].data+(size_t)(off-r->base[i]);
     int i=r->next;r->next^=1;r->base[i]=off;
+    if(!r->window[i].data){r->window[i].data=malloc(CLIP_WINDOW+1u);if(!r->window[i].data)return NULL;r->window[i].cap=CLIP_WINDOW+1u;}
     if(http_native_range(r->url,off,CLIP_WINDOW,&r->total,&r->window[i],&r->status,r->abort)||r->window[i].size<n){buf_reset(&r->window[i]);return NULL;}
     return r->window[i].data;
 }
@@ -121,6 +122,7 @@ static int clip_moov(clip_reader_t *r,buf_t *meta){
         if(size<hdr||pos>r->total||size>r->total-pos)return -1;
         if(moov){
             if(size>2u*1024u*1024u)return -1;
+            if(buf_reserve(meta,(size_t)size+1)<0)return -1;
             for(uint64_t i=0;i<size;){size_t n=(size-i>CLIP_WINDOW)?CLIP_WINDOW:(size_t)(size-i);p=clip_read(r,pos+i,n);if(!p||buf_append(meta,p,n)<0)return -1;i+=n;}
             return 0;
         }

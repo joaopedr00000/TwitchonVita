@@ -9,7 +9,7 @@
  * (tests/chat_test.c); the network thread only exists on the Vita.
  */
 
- #include "auth.h"
+#include "auth.h"
 #include <stddef.h>
 #include <stdint.h>
 

@@ -1118,8 +1118,8 @@ int player_run(const player_params_t *pp, char *err, int errlen)
     }
 
     LOGI("startup: audio thread setup done; start chat if enabled");
+    chat_set_session(pp->chat_session);
     if (pp->chat_on && *pp->chat_on && pp->login)
-        chat_set_session(pp->chat_session);
         chat_start(pp->login,pp->chat_nick,pp->chat_oauth,pp->chat_sender_id);
     img_set_deferred_free(1);
     LOGI("startup: enter player input/render loop");

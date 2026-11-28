@@ -1947,7 +1947,7 @@ static void clip_dialog(const char *login,const twitch_media_t *v,int pos,const 
         snprintf(lp,sizeof(lp),"%s: %s",vt_lang_current()==2?"Repetir prévia":"Loop preview",loop?"ON":"OFF");
         const char *labels[]={d,range,tl,vt_lang_current()==2?"Pré-visualizar":"Preview",lp,vt_lang_current()==2?"Publicar":"Publish",vt_lang_current()==2?"Cancelar":"Cancel"};
         for(int i=0;i<7;i++){int yy=106+i*46;ui_round_rect(140,yy,680,42,5,selected==i?C_PURPLE:C_PANEL);ui_text_fit(154,yy+28,652,C_WHITE,.96f,labels[i]);}
-        if(total>0){int sx=140+(int)(680LL*(end-duration)/total),ex=140+(int)(680LL*end/total);ui_round_rect(140,434,680,8,3,C_PANEL);if(ex>sx)ui_round_rect(sx,434,ex-sx,8,3,C_PURPLE);}
+        if(total>0){int sx=154+(int)(652LL*(end-duration)/total),ex=154+(int)(652LL*end/total);ui_round_rect(154,141,652,4,2,C_DIM);if(ex>sx)ui_round_rect(sx,141,ex-sx,4,2,C_WHITE);}
         ui_text_fit(140,451,680,C_GREY,.78f,vt_lang_current()==2?"Direcional ajusta duração/fim; prévia alinhada ao segmento HLS.":"D-pad adjusts duration/end; preview is HLS segment-aligned.");
         ui_text_fit(140,475,680,C_GREY,.78f,vt_lang_current()==2?"Confirme Publicar para enviar à Twitch.":"Select Publish to send to Twitch.");frame_end();
     }
@@ -2296,6 +2296,7 @@ static void channel_full_profile(const twitch_stream_t *channel,int own,int retu
     static profile_probe_t probe;memset(&probe,0,sizeof(probe));
     unsigned char checked[4][PROFILE_MEDIA_MAX]={{0}};
     int sel=0,armed=0,grid_focus=0,session_focus=0,session_yes=0;const int count=own?7:4,step=924/count;
+    int swipe_consumed=0;
     for(;;){
         ui_input_poll(&g_in);unsigned b=g_in.pressed;
         if(!(g_in.held&(g_btn_ok|g_btn_back))&&!g_in.touch_down)armed=1;
@@ -2337,6 +2338,7 @@ static void channel_full_profile(const twitch_stream_t *channel,int own,int retu
             if(b&SCE_CTRL_LEFT)sel=(sel+count-1)%count;
             if(b&SCE_CTRL_RIGHT)sel=(sel+1)%count;
         }
+        if(!g_in.touch_down)swipe_consumed=0;
         int choose=armed&&(b&g_btn_ok),tab_touch=0;
         for(int i=0;i<count;i++)if(armed&&ui_touch_hit(&g_in,18+i*step,138,step-4,44)){sel=i;grid_focus=0;session_focus=0;session_yes=0;tab_touch=1;choose=0;break;}
         ci=sel==1?0:sel==2?1:own&&sel==3?2:own&&sel==4?3:-1;
@@ -2371,6 +2373,16 @@ static void channel_full_profile(const twitch_stream_t *channel,int own,int retu
                 }
                 if(b&SCE_CTRL_LTRIGGER&&*pos>=8){*pos=(*pos/8-1)*8;grid_focus=1;choose=0;}
                 if(b&SCE_CTRL_RTRIGGER&&(*pos/8+1)*8<j->n){*pos=(*pos/8+1)*8;grid_focus=1;choose=0;}
+                /* Swipe once per gesture, independent of per-frame touch speed. */
+                if(g_in.touch_down&&g_in.touch_dragged&&!swipe_consumed&&g_in.touch_start_y>=190&&g_in.touch_start_y<500){
+                    int dy=g_in.touch_y-g_in.touch_start_y,dx=g_in.touch_x-g_in.touch_start_x;
+                    if((dy>=48||dy<=-48)&&abs(dy)>abs(dx)){
+                        swipe_consumed=1;choose=0;grid_focus=1;
+                        if(dy>0){if(*pos>=8)*pos=(*pos/8-1)*8;}
+                        else if((*pos/8+1)*8<j->n)*pos=(*pos/8+1)*8;
+                        else if(active<0&&profile_has_more(j,ci,*pos/8*8)){grid_focus=2;choose=1;}
+                    }
+                }
                 int page=*pos/8*8;
                 if(probe.active&&(probe.index<page||probe.index>=page+8))profile_probe_stop(&probe);
                 for(int k=0;k<8&&page+k<j->n;k++)if(armed&&ui_touch_hit(&g_in,18+(k%4)*232,193+(k/4)*152,222,148)){*pos=page+k;grid_focus=1;choose=1;break;}

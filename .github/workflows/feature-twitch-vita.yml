@@ -56,8 +56,10 @@ jobs:
       - name: MP4 parser regression
         run: |
           set -euo pipefail
-          gcc -std=gnu11 -Wall -Wextra -Isrc tests/mp4_test.c src/mp4_demux.c -o /tmp/vt-mp4-test
-          /tmp/vt-mp4-test
+          command -v ffmpeg >/dev/null || (sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg)
+          ffmpeg -hide_banner -loglevel error -f lavfi -i testsrc2=size=320x180:rate=25 -f lavfi -i sine=frequency=440:sample_rate=44100 -t 4 -c:v libx264 -g 25 -bf 0 -c:a aac -movflags +faststart /tmp/vt-clip.mp4
+          gcc -std=gnu11 -Wall -Wextra -Isrc tests/mp4_range_test.c src/mp4_demux.c -o /tmp/vt-mp4-test
+          /tmp/vt-mp4-test /tmp/vt-clip.mp4
       - name: Verify Vita source wiring without altering original player codecs
         run: |
           set -euo pipefail

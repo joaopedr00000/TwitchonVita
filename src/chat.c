@@ -616,6 +616,7 @@ static struct {
     int thread_started,sender_started;
     pthread_t sender_thread;
     auth_t session;
+    int session_updated;
     char broadcaster[24],notice[160];
     unsigned long long validated_at;
 } C;
@@ -810,6 +811,7 @@ static int send_native_message(const char *message,char *reason,size_t cap)
         if(C.session.access[0]){
             int a=auth_ensure_token(&C.session,err,sizeof(err),&C.stop);
             if(a){snprintf(reason,cap,a==-1?"TOKEN INVALID - LOGIN":"SESSION NETWORK");return -1;}
+            if(strcmp(C.oauth,C.session.access))C.session_updated=1;
             snprintf(C.oauth,sizeof(C.oauth),"%s",C.session.access);
         }
     }
@@ -886,7 +888,7 @@ static void *chat_sender_thread(void *argp){
             if(outgoing[0]){
                 char reason[64]="",notice[160];
                 int sent=send_native_message(outgoing,reason,sizeof(reason));
-                pthread_mutex_lock(&C.lock);C.awaiting=0;pthread_mutex_unlock(&C.lock);
+                pthread_mutex_lock(&C.lock);C.awaiting=0;if(strstr(reason,"HTTP 429")||!strcmp(reason,"slow_mode"))C.last_send=sceKernelGetProcessTimeWide()+8500000ULL;pthread_mutex_unlock(&C.lock);
                 if(sent<0&&!C.stop){
                     const int pt=!strcmp(vt_lang_code(vt_lang_current()),"pt-BR");
                     const char *explanation=NULL;
@@ -898,6 +900,8 @@ static void *chat_sender_thread(void *argp){
                     else if(!strcmp(reason,"slow_mode"))explanation=pt?"Modo lento; aguarde":"Slow mode; please wait";
                     else if(!strcmp(reason,"verified_account")||!strcmp(reason,"verified_phone_number"))explanation=pt?"Conta precisa de verificacao":"Account verification required";
                     else if(!strcmp(reason,"user_banned")||!strcmp(reason,"user_timed_out")||!strcmp(reason,"user_warned"))explanation=pt?"Restricao de moderacao do canal":"Channel moderation restriction";
+                    else if(strstr(reason,"HTTP 429"))explanation=pt?"Limite de mensagens; aguarde":"Rate limited; wait before sending";
+                    else if(!strcmp(reason,"TOKEN INVALID - LOGIN"))explanation=pt?"Sessão expirada; entre novamente":"Session expired; sign in again";
                     else if(!strcmp(reason,"INVALID_RESPONSE"))explanation=pt?"Resposta da Twitch nao reconhecida":"Unexpected Twitch response";
                     snprintf(notice,sizeof(notice),"%s [%s]",explanation?explanation:vt_msg("Failed to send chat message"),reason);
                     set_status("%s",reason);pthread_mutex_lock(&C.lock);snprintf(C.notice,sizeof(C.notice),"%s",notice);pthread_mutex_unlock(&C.lock);
@@ -1002,7 +1006,7 @@ void chat_start(const char *login,const char *nick,const char *oauth,const char 
         snprintf(C.nick,sizeof(C.nick),"%s",nick);snprintf(C.oauth,sizeof(C.oauth),"%s",oauth);if(numeric_id(sender_id))snprintf(C.sender_id,sizeof(C.sender_id),"%s",sender_id);
     }
     C.writable=C.oauth[0]&&numeric_id(C.sender_id);
-    C.validated_at=0;C.broadcaster[0]=C.notice[0]=0;memset(&C.session,0,sizeof(C.session));
+    C.validated_at=0;C.session_updated=0;C.broadcaster[0]=C.notice[0]=0;memset(&C.session,0,sizeof(C.session));
     if(chat_session&&C.writable&&!strcmp(chat_session->user_id,C.sender_id))C.session=*chat_session;
     C.version++;
     twitch_sanitize_login(login,C.login,sizeof(C.login));
@@ -1037,7 +1041,7 @@ void chat_stop(void)
         C.thread_started = 0;
     }
     if(C.sender_started){pthread_join(C.sender_thread,NULL);C.sender_started=0;}
-    if(chat_session&&C.session.access[0]&&!strcmp(chat_session->user_id,C.session.user_id))*chat_session=C.session;
+    if(chat_session&&C.session_updated&&C.session.access[0]&&!strcmp(chat_session->user_id,C.session.user_id))*chat_session=C.session;
     memset(&C.session,0,sizeof(C.session));memset(C.oauth,0,sizeof(C.oauth));C.nick[0]=0;
 }
 
@@ -1049,7 +1053,7 @@ int chat_queue_message(const char *text){
     unsigned long long now=sceKernelGetProcessTimeWide();int rc=0;
     pthread_mutex_lock(&C.lock);
     if(!C.writable||!C.running)rc=-1;
-    else if(C.queued||C.awaiting||(C.last_send&&now-C.last_send<1500000ULL))rc=-2;
+    else if(C.queued||C.awaiting||(C.last_send&&(now<C.last_send||now-C.last_send<1500000ULL)))rc=-2;
     else {snprintf(C.outgoing,sizeof(C.outgoing),"%s",buf);C.queued=1;C.last_send=now;}
     pthread_mutex_unlock(&C.lock);return rc;
 }
