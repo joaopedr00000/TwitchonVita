@@ -49,6 +49,7 @@ int twitch_build_list_body(twitch_list_t kind, const char *query, char *out, siz
 int twitch_channel_url(const char *login, char *out, size_t cap);
 int twitch_build_vod_url(const char *id,const char *token,const char *sig,unsigned nonce,char *out,size_t cap);
 const char *twitch_vod_rejection(const char *body);
+const char *twitch_vod_access_message(const char *reason);
 int twitch_parse_clip_source(const char *json,char *vod,size_t cap,int *offset);
 int twitch_parse_channel_bio(const char *json, char *bio, size_t cap);
 /* Unknown=-1; 0=not followed; 1=followed; 2=not eligible. */

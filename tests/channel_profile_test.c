@@ -1,4 +1,5 @@
 #include "twitch.h"
+#include "i18n.h"
 #include <assert.h>
 #include <string.h>
 int main(void){
@@ -52,5 +53,20 @@ int main(void){
     assert(!strcmp(twitch_vod_rejection("[{\"type\":\"error\",\"error\":\"Invalid signature\"}]"),"SIGNATURE"));
     assert(!strcmp(twitch_vod_rejection("{\"message\":\"Subscribers only\"}"),"SUBSCRIPTION"));
     assert(!strcmp(twitch_vod_rejection("not JSON"),"UNKNOWN"));
+    assert(!strcmp(twitch_vod_rejection("{\"error\":\"Forbidden\",\"message\":\"Subscribers only\"}"),"SUBSCRIPTION"));
+    assert(vt_lang_set_code("pt-BR")==0);
+    assert(!strcmp(twitch_vod_access_message("SUBSCRIPTION"),"Este vídeo está disponível apenas para inscritos no canal."));
+    assert(!strstr(twitch_vod_access_message("DENIED"),"inscritos"));
+    assert(!strstr(twitch_vod_access_message("SIGNATURE"),"403"));
+    assert(vt_lang_set_code("es")==0);
+    assert(strstr(twitch_vod_access_message("SUBSCRIPTION"),"suscriptores"));
+    assert(vt_lang_set_code("en")==0);
+    assert(strstr(twitch_vod_access_message("SUBSCRIPTION"),"subscribers"));
+    for(int i=0;i<VT_LANG_COUNT;i++){
+        assert(vt_lang_set(i)==0);
+        assert(*twitch_vod_access_message("SUBSCRIPTION"));
+        assert(*twitch_vod_access_message("UNKNOWN"));
+        assert(!strstr(twitch_vod_access_message("UNKNOWN"),"403"));
+    }
     return 0;
 }

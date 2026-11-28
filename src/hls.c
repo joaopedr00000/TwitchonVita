@@ -165,7 +165,11 @@ static void *hls_thread(void *argp)
             LOGW("hls: fallo al leer la playlist (HTTP %ld, intento %d)", status, fails + 1);
             if (++fails >= 4 || status == 404 || status == 403 || status == 401) {
                 h->retryable = 1;
-                if(h->recorded)snprintf(h->error,sizeof(h->error),"VOD playlist download HTTP %ld curl %d",status,-net);
+                if(h->recorded&&status==403){
+                    const char *reason=twitch_vod_rejection((const char*)pl.data);
+                    snprintf(h->error,sizeof(h->error),"%s",twitch_vod_access_message(reason));
+                    LOGW("vod: media playlist HTTP 403 class=%s curl=%d",reason,-net);
+                }else if(h->recorded)snprintf(h->error,sizeof(h->error),"VOD playlist download HTTP %ld curl %d",status,-net);
                 else snprintf(h->error, sizeof(h->error), vt_msg("Stream terminado (HTTP %ld)"), status);
                 LOGE("hls: %s", h->error);
                 break;

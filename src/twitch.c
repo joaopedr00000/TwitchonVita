@@ -71,12 +71,11 @@ int twitch_build_vod_url(const char *id,const char *token,const char *sig,unsign
 /* Classify error responses rather than logging arbitrary server text or tokens. */
 const char *twitch_vod_rejection(const char *body){
     json_t *r=body?json_parse(body):NULL;
-    const char *e=json_str(r,"0.error","");
-    if(!*e)e=json_str(r,"error","");
-    if(!*e)e=json_str(r,"message","");
-    char lower[256];size_t i=0;
-    for(;e[i]&&i+1<sizeof(lower);i++)lower[i]=(char)tolower((unsigned char)e[i]);
-    lower[i]=0;
+    char lower[1024];
+    snprintf(lower,sizeof(lower),"%s %s %s %s",
+        json_str(r,"0.error",""),json_str(r,"0.message",""),
+        json_str(r,"error",""),json_str(r,"message",""));
+    for(size_t i=0;lower[i];i++)lower[i]=(char)tolower((unsigned char)lower[i]);
     const char *why=strstr(lower,"subscriber")||strstr(lower,"subscription")?"SUBSCRIPTION":
         strstr(lower,"geo")||strstr(lower,"region")?"REGION":
         strstr(lower,"expired")?"EXPIRED":
@@ -85,6 +84,54 @@ const char *twitch_vod_rejection(const char *body){
         strstr(lower,"not found")||strstr(lower,"unavailable")?"UNAVAILABLE":
         strstr(lower,"forbidden")||strstr(lower,"denied")?"DENIED":"UNKNOWN";
     json_free(r);return why;
+}
+/* A bare HTTP 403 does not establish a subscriber restriction. */
+const char *twitch_vod_access_message(const char *reason){
+    static const char *const subscriber[VT_LANG_COUNT]={
+        "This video is available to channel subscribers only.",
+        "Este vídeo solo está disponible para los suscriptores del canal.",
+        "Este vídeo está disponível apenas para inscritos no canal.",
+        "Cette vidéo est réservée aux abonnés de la chaîne.",
+        "Questo video è disponibile solo per gli abbonati al canale.",
+        "Dieses Video ist nur für Kanalabonnenten verfügbar.",
+        "Это видео доступно только платным подписчикам канала.",
+        "Video ini hanya tersedia untuk pelanggan berlangganan kanal.",
+        "Available lang ang video na ito sa mga subscriber ng channel.",
+        "Kini nga video para lamang sa mga subscriber sa channel.",
+        "Deze video is alleen beschikbaar voor abonnees van het kanaal.",
+        "Ten film jest dostępny tylko dla subskrybentów kanału.",
+        "Bu video yalnızca kanal abonelerine açıktır.",
+        "Це відео доступне лише платним підписникам каналу.",
+        "Den här videon är endast tillgänglig för kanalens prenumeranter.",
+        "この動画はチャンネルのサブスクライバー限定です。",
+        "이 동영상은 채널 유료 구독자만 볼 수 있습니다.",
+        "此视频仅限频道付费订阅者观看。",
+        "此影片僅供頻道付費訂閱者觀看。"
+    };
+    static const char *const denied[VT_LANG_COUNT]={
+        "Unable to access this video. Check your account or video availability.",
+        "No se puede acceder al vídeo. Comprueba tu cuenta o su disponibilidad.",
+        "Não foi possível acessar este vídeo. Verifique sua conta ou a disponibilidade do vídeo.",
+        "Impossible d'accéder à cette vidéo. Vérifiez votre compte ou sa disponibilité.",
+        "Impossibile accedere al video. Verifica il tuo account o la disponibilità.",
+        "Kein Zugriff auf dieses Video. Prüfe dein Konto oder die Verfügbarkeit.",
+        "Нет доступа к видео. Проверьте аккаунт или доступность видео.",
+        "Video tidak dapat diakses. Periksa akun atau ketersediaan video.",
+        "Hindi ma-access ang video. Suriin ang account o availability nito.",
+        "Dili ma-access ang video. Susiha ang account o pagkaanaa niini.",
+        "Geen toegang tot deze video. Controleer je account of de beschikbaarheid.",
+        "Brak dostępu do filmu. Sprawdź konto lub dostępność filmu.",
+        "Videoya erişilemiyor. Hesabını veya videonun erişilebilirliğini kontrol et.",
+        "Немає доступу до відео. Перевірте акаунт або доступність відео.",
+        "Videon kan inte nås. Kontrollera ditt konto eller videons tillgänglighet.",
+        "動画にアクセスできません。アカウントや公開状況を確認してください。",
+        "동영상에 접근할 수 없습니다. 계정 또는 동영상 공개 상태를 확인하세요.",
+        "无法访问此视频。请检查账号或视频是否可用。",
+        "無法存取此影片。請檢查帳號或影片是否可用。"
+    };
+    int lang=vt_lang_current();
+    if(lang<0||lang>=VT_LANG_COUNT)lang=0;
+    return reason&&!strcmp(reason,"SUBSCRIPTION")?subscriber[lang]:denied[lang];
 }
 int twitch_parse_clip_source(const char *json,char *vod,size_t cap,int *offset){
     if(!json||!vod||!cap||!offset)return -1;
@@ -1104,7 +1151,14 @@ int twitch_vod_variants(const char *id,const char *oauth,m3u8_variant_t *out,int
     if(oauth&&*oauth&&!strpbrk(oauth,"\r\n")){char a[160];snprintf(a,sizeof(a),"Authorization: OAuth %s",oauth);next=curl_slist_append(h,a);if(!next)goto done;h=next;}
     int net=trust==CURLE_OK?http_request(c,"https://gql.twitch.tv/gql",body,h,&b,&status,abort_flag):-(int)trust;
     if((trust!=CURLE_OK||net==-(int)CURLE_SSL_CACERT_BADFILE)&&!status&&!(abort_flag&&*abort_flag))net=http_native_read("https://gql.twitch.tv/gql",body,oauth,1,&b,&status,abort_flag);
-    if(net<0||status!=200)goto done;
+    if(net<0||status!=200){
+        if(status==403){
+            const char *reason=twitch_vod_rejection((const char*)b.data);
+            snprintf(err,errlen,"%s",twitch_vod_access_message(reason));
+            LOGW("vod: token request HTTP 403 class=%s curl=%d",reason,-net);
+        }
+        goto done;
+    }
     json_t *root=json_parse((const char*)b.data);
     const char *token=json_str(root,"data.videoPlaybackAccessToken.value",""),*sig=json_str(root,"data.videoPlaybackAccessToken.signature","");
     char *et=*token?curl_easy_escape(c,token,0):NULL,*es=*sig?curl_easy_escape(c,sig,0):NULL;
@@ -1114,10 +1168,10 @@ int twitch_vod_variants(const char *id,const char *oauth,m3u8_variant_t *out,int
     if(built<0){snprintf(err,errlen,"VOD playback token missing or URL too long");goto done;}
     net=http_media_get(c,(int)trust,url,&b,&status,abort_flag);
     if(net<0||status!=200){
-        if(!net&&status==403){
+        if(status==403){
             const char *reason=twitch_vod_rejection((const char*)b.data);
-            snprintf(err,errlen,"VOD HTTP 403 [%s]",reason);
-            LOGW("vod: Usher rejected signed request, class=%s",reason);
+            snprintf(err,errlen,"%s",twitch_vod_access_message(reason));
+            LOGW("vod: Usher HTTP 403 class=%s curl=%d",reason,-net);
         }else snprintf(err,errlen,"VOD playlist HTTP %ld curl %d",status,-net);
         goto done;
     }
