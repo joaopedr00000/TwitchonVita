@@ -106,6 +106,24 @@ int chat_prepare_outgoing(const char *in,char *out,size_t cap){
 }
 
 /* Parse the documented Helix response, independent of Vita networking. */
+/* A verified /validate HTTP 200 establishes current validity. expires_in
+ * is informational; a missing/zero lifetime must not override that status. */
+int chat_validate_identity(const char *body,const char *client,const char *sender,char *reason,size_t cap)
+{
+    json_t *r=json_parse(body);
+    const char *cid=json_str(r,"client_id","");
+    const char *uid=json_str(r,"user_id","");
+    json_t *scopes=json_get(r,"scopes");
+    int write=0,client_ok=client&&*client&&!strcmp(cid,client),user_ok=sender&&*sender&&!strcmp(uid,sender);
+    for(int i=0;scopes&&scopes->type==JSON_ARRAY&&i<scopes->count;i++)
+        if(!strcmp(json_str(json_at(scopes,i),NULL,""),"user:write:chat"))write=1;
+    double expiry=json_num(r,"expires_in",-1);
+    LOGI("chat: validate 200 client_match=%d user_match=%d write_scope=%d expires_in=%.0f",client_ok,user_ok,write,expiry);
+    json_free(r);
+    snprintf(reason,cap,"%s",!client_ok?"CLIENT ID":!user_ok?"USER ID":!write?"SCOPE user:write:chat":"");
+    return client_ok&&user_ok&&write?0:-1;
+}
+
 int chat_parse_send_result(const char *json,char *code,size_t code_cap)
 {
     json_t *root=json_parse(json);
@@ -741,20 +759,7 @@ static int send_native_message(const char *message,char *reason,size_t cap)
     stage="VALIDATE";
     rc=native_helix("https://id.twitch.tv/oauth2/validate",NULL,response,sizeof(response),&status,1);
     if(rc<0||status!=200)goto done;
-    json_t *validation=json_parse(response);
-    const char *client=json_str(validation,"client_id","");
-    const char *uid=json_str(validation,"user_id","");
-    json_t *scopes=json_get(validation,"scopes");
-    int write=0,client_ok=!strcmp(client,TWITCH_CLIENT_ID),user_ok=!strcmp(uid,C.sender_id);
-    for(int i=0;scopes&&i<scopes->count;i++)
-        if(!strcmp(json_str(json_at(scopes,i),NULL,""),"user:write:chat"))write=1;
-    int expiry=(int)json_num(validation,"expires_in",0);
-    LOGI("chat: validate 200 client_match=%d user_match=%d write_scope=%d expires_in=%d",client_ok,user_ok,write,expiry);
-    json_free(validation);
-    if(!client_ok||!user_ok||!write||expiry<=0){
-        snprintf(reason,cap,"%s",!client_ok?"CLIENT ID":!user_ok?"USER ID":!write?"SCOPE user:write:chat":"TOKEN EXPIRED");
-        goto cleanup;
-    }
+    if(chat_validate_identity(response,TWITCH_CLIENT_ID,C.sender_id,reason,cap)<0)goto cleanup;
     /* Resolve the channel using verified Helix, not unverified IRC ROOMSTATE. */
     stage="USERS";
     snprintf(url,sizeof(url),"https://api.twitch.tv/helix/users?login=%s",C.login);
@@ -785,7 +790,8 @@ done:
         json_t *error=json_parse(response);
         const char *message=json_str(error,"message","");
         const char *kind=strstr(message,"scope")?"SCOPE":strstr(message,"client ID")||strstr(message,"client id")||strstr(message,"Client ID")?"CLIENT":strstr(message,"sender_id")?"SENDER":strstr(message,"token")?"TOKEN":"";
-        snprintf(reason,cap,"%s HTTP %d %s",stage,status,kind);
+        if(status==401&&!strcmp(stage,"VALIDATE"))snprintf(reason,cap,"TOKEN INVALID - LOGIN");
+        else snprintf(reason,cap,"%s HTTP %d %s",stage,status,kind);
         LOGW("chat: rejected stage=%s HTTP=%d class=%s",stage,status,kind);
         json_free(error);
     }

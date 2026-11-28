@@ -15,6 +15,11 @@ int main(void){
  assert(chat_prepare_outgoing("OK",out,2)<0);
  assert(chat_prepare_outgoing(" OK ",out,sizeof out)==2);
  char reason[64];
+ assert(chat_validate_identity("{\"client_id\":\"app\",\"user_id\":\"123\",\"scopes\":[\"user:write:chat\"],\"expires_in\":0}","app","123",reason,sizeof reason)==0);
+ assert(chat_validate_identity("{\"client_id\":\"app\",\"user_id\":\"123\",\"scopes\":[\"user:write:chat\"]}","app","123",reason,sizeof reason)==0);
+ assert(chat_validate_identity("{\"client_id\":\"app\",\"user_id\":\"123\",\"scopes\":[\"chat:read\"],\"expires_in\":3600}","app","123",reason,sizeof reason)<0);
+ assert(chat_validate_identity("{\"client_id\":\"other\",\"user_id\":\"123\",\"scopes\":[\"user:write:chat\"]}","app","123",reason,sizeof reason)<0);
+ assert(chat_validate_identity("{\"client_id\":\"app\",\"user_id\":\"456\",\"scopes\":[\"user:write:chat\"]}","app","123",reason,sizeof reason)<0);
  assert(chat_parse_send_result("{\"data\":[{\"message_id\":\"abc-123\",\"is_sent\":true,\"drop_reason\":null}]}",reason,sizeof reason)==0);
  assert(reason[0]==0);
  assert(chat_parse_send_result("{\"data\":[{\"message_id\":\"\",\"is_sent\":false,\"drop_reason\":{\"code\":\"automod_held\",\"message\":\"held\"}}]}",reason,sizeof reason)==1);
