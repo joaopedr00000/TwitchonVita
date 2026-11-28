@@ -45,6 +45,7 @@ int auth_device_poll(const auth_device_t *d, auth_t *a, char *err, size_t errlen
 /* Checks the token; refreshes it if expired. Fills login/user_id and the
  * display name/avatar. Returns 0 if the session is usable, -1 if the user must
  * log in again, -2 on network errors (keep the stored session). */
+int auth_ensure_token(auth_t *a,char *err,size_t errlen,volatile int *abort_flag);
 int auth_ensure_valid(auth_t *a, char *err, size_t errlen, volatile int *abort_flag);
 #endif
 

@@ -45,9 +45,10 @@ int auth_parse_token(const char *json, auth_t *a, char *err, size_t errlen)
     const char *at = json_str(r, "access_token", NULL);
     int ret = -1;
 
-    if (at) {
+    if (at && *at && strlen(at)<sizeof(a->access) && strlen(json_str(r,"refresh_token",""))<sizeof(a->refresh)) {
         copy_str(a->access, sizeof(a->access), at);
-        copy_str(a->refresh, sizeof(a->refresh), json_str(r, "refresh_token", ""));
+        const char *rt=json_str(r,"refresh_token",NULL);
+        if(rt&&*rt)copy_str(a->refresh,sizeof(a->refresh),rt);
         ret = AUTH_OK;
     } else {
         const char *msg = json_str(r, "message", "");
@@ -127,16 +128,7 @@ int auth_save(const auth_t *a, const char *path)
 static int post_form(const char *url, const char *form, buf_t *resp, long *status,
                      volatile int *abort_flag)
 {
-    CURL *c = http_new();
-    struct curl_slist *hdr = NULL;
-    int r;
-    if (!c)
-        return -1;
-    hdr = curl_slist_append(hdr, "Content-Type: application/x-www-form-urlencoded");
-    r = http_request(c, url, form, hdr, resp, status, abort_flag);
-    curl_slist_free_all(hdr);
-    http_free(c);
-    return r;
+    return http_native_identity(url,form,NULL,resp,status,abort_flag);
 }
 
 int auth_device_start(auth_device_t *d, char *err, size_t errlen, volatile int *abort_flag)
@@ -179,26 +171,19 @@ int auth_device_poll(const auth_device_t *d, auth_t *a, char *err, size_t errlen
 
 static int validate(auth_t *a, volatile int *abort_flag)
 {
-    CURL *c = http_new();
-    struct curl_slist *hdr = NULL;
-    buf_t resp = {0};
-    long status = 0;
-    char h[128];
-    int ret = -2;
-    if (!c)
-        return -2;
-    snprintf(h, sizeof(h), "Authorization: OAuth %s", a->access);
-    hdr = curl_slist_append(hdr, h);
-    if (http_request(c, "https://id.twitch.tv/oauth2/validate", NULL, hdr, &resp, &status, abort_flag) == 0) {
-        if (status == 200 && auth_parse_validate((const char *)resp.data, a) == 0)
-            ret = 0;
-        else if (status == 401)
-            ret = -1;
+    buf_t resp={0};long status=0;int ret=-2;
+    if(!http_native_identity("https://id.twitch.tv/oauth2/validate",NULL,a->access,&resp,&status,abort_flag)){
+        if(status==401)ret=-1;
+        else if(status==200){
+            json_t *r=json_parse((const char*)resp.data);
+            const char *uid=json_str(r,"user_id",""),*cid=json_str(r,"client_id","");
+            if(!strcmp(cid,TWITCH_CLIENT_ID)&&*uid&&(!a->user_id[0]||!strcmp(uid,a->user_id)))
+                ret=auth_parse_validate((const char*)resp.data,a);
+            else ret=-1;
+            json_free(r);
+        }
     }
-    curl_slist_free_all(hdr);
-    buf_free(&resp);
-    http_free(c);
-    return ret;
+    buf_free(&resp);return ret;
 }
 
 static int refresh(auth_t *a, char *err, size_t errlen, volatile int *abort_flag)
@@ -242,7 +227,7 @@ static void fetch_profile(auth_t *a, volatile int *abort_flag)
     buf_free(&resp);
 }
 
-int auth_ensure_valid(auth_t *a, char *err, size_t errlen, volatile int *abort_flag)
+int auth_ensure_token(auth_t *a, char *err, size_t errlen, volatile int *abort_flag)
 {
     int r = validate(a, abort_flag);
     if (r == -1) {
@@ -250,12 +235,14 @@ int auth_ensure_valid(auth_t *a, char *err, size_t errlen, volatile int *abort_f
         if (r == 0)
             r = validate(a, abort_flag);
     }
-    if (r == 0)
-        fetch_profile(a, abort_flag);
-    else if (r == -1)
+    if (r == -1)
         snprintf(err, errlen, vt_msg("La sesion ha caducado. Vuelve a iniciar sesion."));
-    else
+    else if(r!=0)
         snprintf(err, errlen, vt_msg("No se pudo comprobar la sesion (sin conexion?)"));
     return r;
+}
+int auth_ensure_valid(auth_t *a,char *err,size_t errlen,volatile int *abort_flag){
+    int r=auth_ensure_token(a,err,errlen,abort_flag);
+    if(!r)fetch_profile(a,abort_flag);return r;
 }
 #endif

@@ -51,6 +51,9 @@ int mp4_demux_set_init(mp4_demux_t *d, const uint8_t *data, size_t len);
 int mp4_demux_feed(mp4_demux_t *d, const uint8_t *data, size_t len);
 int mp4_demux_file(mp4_demux_t *d,const uint8_t *data,size_t len);
 int mp4_demux_file_seek(mp4_demux_t *d,const uint8_t *data,size_t len,int start,volatile int *actual);
+typedef const uint8_t *(*mp4_read_at)(void *ctx,uint64_t offset,size_t bytes);
+int mp4_demux_range_seek(mp4_demux_t *d,const uint8_t *moov,size_t moov_len,size_t file_len,mp4_read_at read,void *ctx,int start,volatile int *actual);
+int mp4_clip_info(const uint8_t *moov,size_t len,int *width,int *height,float *fps);
 void mp4_demux_discontinuity(mp4_demux_t *d);
 
 /* 1 if the bytes look like an MP4 segment (box header), 0 for MPEG-TS. */

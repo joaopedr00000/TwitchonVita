@@ -9,6 +9,7 @@
  * (tests/chat_test.c); the network thread only exists on the Vita.
  */
 
+ #include "auth.h"
 #include <stddef.h>
 #include <stdint.h>
 
@@ -91,6 +92,7 @@ int chat_resolve_badges(const char *tag, int16_t *out, int max);
 
 /* ---- live chat (Vita only) ---- */
 /* Anonymous IRC read; authenticated Helix writes use verified Sony HTTPS. */
+void chat_set_session(auth_t *a);
 void chat_start(const char *login,const char *nick,const char *oauth,const char *sender_id);
 int chat_can_send(void);
 int chat_retry_auth(void);

@@ -1061,8 +1061,9 @@ out:
 static int media_request(const char *url,const char *oauth,const char *post,buf_t *b,long *status,volatile int *abort_flag){
     *status=0;
     if(!oauth||!*oauth||strpbrk(oauth,"\r\n")||strlen(oauth)>100)return -CURLE_BAD_FUNCTION_ARGUMENT;
+    if(post)return http_native_clip_post(url,oauth,b,status,abort_flag);
     CURL *c=http_new();if(!c)return -CURLE_FAILED_INIT;
-    CURLcode trust=vt_tls_configure(c);if(trust!=CURLE_OK){http_free(c);if(!post)return http_native_read(url,NULL,oauth,0,b,status,abort_flag);return -(int)trust;}
+    CURLcode trust=vt_tls_configure(c);if(trust!=CURLE_OK){http_free(c);return http_native_read(url,NULL,oauth,0,b,status,abort_flag);}
     curl_easy_setopt(c,CURLOPT_FOLLOWLOCATION,0L);
     char auth[160];snprintf(auth,sizeof(auth),"Authorization: Bearer %s",oauth);
     struct curl_slist *h=NULL,*next;
@@ -1346,7 +1347,7 @@ done:
     if(n<0&&!err[0])snprintf(err,errlen,"VOD unavailable / Vídeo indisponível (HTTP %ld)",status);
     curl_slist_free_all(h);buf_free(&b);http_free(c);return n;
 }
-int twitch_clip_mp4(const char *id,char *url,size_t cap,int *height,char *err,size_t errlen,char *vod,size_t vod_cap,int *offset,volatile int *abort_flag){
+int twitch_clip_mp4(const char *id,int max_height,char *url,size_t cap,int *height,char *err,size_t errlen,char *vod,size_t vod_cap,int *offset,volatile int *abort_flag){
     if(!clip_id_ok(id))return -1;
     char body[768];snprintf(body,sizeof(body),"{\"operationName\":\"VideoAccessToken_Clip\",\"variables\":{\"slug\":\"%s\",\"platform\":\"web\"},\"extensions\":{\"persistedQuery\":{\"version\":1,\"sha256Hash\":\"993d9a5131f15a37bd16f32342c44ed1e0b1a9b968c6afdb662d2cddd595f6c5\"}}}",id);
     buf_t b={0};long status=0;int rc=-1;
@@ -1361,7 +1362,7 @@ int twitch_clip_mp4(const char *id,char *url,size_t cap,int *height,char *err,si
     const char *src=NULL;int best=0;
     if(arr&&arr->type==JSON_ARRAY)for(json_t *j=arr->child;j;j=j->next){
         int q=atoi(json_str(j,"quality",""));const char *s=json_str(j,"sourceURL","");
-        if(q<160||q>720||strncmp(s,"https://",8)||strpbrk(s,"\r\n"))continue;
+        if(q<160||q>max_height||strncmp(s,"https://",8)||strpbrk(s,"\r\n"))continue;
         if(!src||(q<=360&&(best>360||q>best))||(q>360&&best>360&&q<best)){src=s;best=q;}
     }
     if(json_get(root,"errors"))snprintf(err,errlen,"Clip playback query rejected (GQL)");
@@ -1391,6 +1392,20 @@ int twitch_create_clip(void *arg,volatile int *abort_flag){
     if(!j->oauth[0]){snprintf(j->error,sizeof(j->error),"Sign in / Entre na conta");return -1;}
     if(!numeric_id(j->broadcaster)&&media_user_id(j->login,j->oauth,j->broadcaster,sizeof(j->broadcaster),abort_flag)<0){snprintf(j->error,sizeof(j->error),"Channel unavailable");return -1;}
     if(j->duration<5||j->duration>60)return -1;
+    if(http_native_identity("https://id.twitch.tv/oauth2/validate",NULL,j->oauth,&b,&status,abort_flag)||status!=200){
+        snprintf(j->error,sizeof(j->error),"Session validation failed (HTTP %ld)",status);goto done;
+    }
+    json_t *identity=json_parse((const char*)b.data),*scopes=json_get(identity,"scopes");
+    int live_scope=0,owner_scope=0,editor_scope=0;
+    for(int i=0;scopes&&scopes->type==JSON_ARRAY&&i<scopes->count;i++){
+        const char *s=json_str(json_at(scopes,i),NULL,"");
+        live_scope|=!strcmp(s,"clips:edit");owner_scope|=!strcmp(s,"channel:manage:clips");editor_scope|=!strcmp(s,"editor:manage:clips");
+    }
+    int identity_ok=!strcmp(json_str(identity,"client_id",""),TWITCH_CLIENT_ID)&&numeric_id(j->user_id)&&!strcmp(json_str(identity,"user_id",""),j->user_id);
+    json_free(identity);buf_free(&b);
+    if(!identity_ok||(!j->vod_id[0]&&!live_scope)||(j->vod_id[0]&&!editor_scope&&!(owner_scope&&!strcmp(j->broadcaster,j->user_id)))){
+        snprintf(j->error,sizeof(j->error),"Missing clip permission; authorize again (VOD: owner/editor)");return -1;
+    }
     if(j->vod_id[0]){
         if(!numeric_id(j->vod_id)||!numeric_id(j->user_id)||j->offset<j->duration){snprintf(j->error,sizeof(j->error),"Invalid clip range");return -1;}
         CURL *c=http_new();if(!c)return -1;char *title=curl_easy_escape(c,j->title[0]?j->title:"VitaTwitch clip",0);
@@ -1403,8 +1418,9 @@ int twitch_create_clip(void *arg,volatile int *abort_flag){
         int len=snprintf(url,sizeof(url),"https://api.twitch.tv/helix/clips?broadcaster_id=%s&duration=%d&title=%s",j->broadcaster,j->duration,title);
         curl_free(title);http_free(c);if(len<0||(size_t)len>=sizeof(url))return -1;
     }
-    if(media_request(url,j->oauth,"",&b,&status,abort_flag)<0||status!=202){
-        snprintf(j->error,sizeof(j->error),status==401?"Authorize again / Entre novamente (clip scope)":status==403?"Clips blocked or editor permission required":status==404?"Stream or VOD unavailable":"Clip request failed (HTTP %ld)",status);goto done;
+    int submit=media_request(url,j->oauth,"",&b,&status,abort_flag);
+    if(submit<0||status!=202){
+        snprintf(j->error,sizeof(j->error),status==401?"Authorize again / Entre novamente (clip scope)":status==403?"Clips blocked or editor permission required":status==404?"Stream or VOD unavailable":status==429?"Rate limit; wait before publishing":submit<0?"Publication uncertain; check channel before retrying":"Clip request failed (HTTP %ld)",status);goto done;
     }
     json_t *root=json_parse((const char*)b.data);const char *id=json_str(root,"data.0.id","");
     if(clip_id_ok(id))snprintf(j->id,sizeof(j->id),"%s",id);
@@ -1415,7 +1431,7 @@ int twitch_create_clip(void *arg,volatile int *abort_flag){
     for(int i=0;i<20&&!(abort_flag&&*abort_flag);i++){
         if(i)for(int k=0;k<30&&!(abort_flag&&*abort_flag);k++)sceKernelDelayThread(100000);
         if(abort_flag&&*abort_flag)break;
-        if(!media_request(url,j->oauth,NULL,&b,&status,abort_flag)&&status==200){
+        if(!http_native_read(url,NULL,j->oauth,0,&b,&status,abort_flag)&&status==200){
             root=json_parse((const char*)b.data);
             if(!strcmp(json_str(root,"data.0.id",""),j->id))j->confirmed=1;
             json_free(root);if(j->confirmed)break;

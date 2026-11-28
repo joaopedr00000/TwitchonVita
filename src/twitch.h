@@ -101,7 +101,7 @@ int twitch_fetch_media_page(const char *login,const char *oauth,int kind,twitch_
 int twitch_fetch_media(const char *login,const char *oauth,int kind,twitch_media_t *out,int max,char *err,size_t errlen,volatile int *abort_flag);
 int twitch_vod_variants(const char *id,const char *oauth,m3u8_variant_t *out,int max,char *err,size_t errlen,volatile int *abort_flag);
 int twitch_create_clip(void *arg,volatile int *abort_flag);
-int twitch_clip_mp4(const char *id,char *url,size_t cap,int *height,char *err,size_t errlen,char *vod,size_t vod_cap,int *offset,volatile int *abort_flag);
+int twitch_clip_mp4(const char *id,int max_height,char *url,size_t cap,int *height,char *err,size_t errlen,char *vod,size_t vod_cap,int *offset,volatile int *abort_flag);
 
 /* POSTs a GQL body. oauth may be NULL/empty. Returns 0 if HTTP 200. */
 int twitch_gql(const char *body, const char *oauth, buf_t *resp,

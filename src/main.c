@@ -46,7 +46,7 @@ int _newlib_heap_size_user = 96 * 1024 * 1024;
 #define SETTINGS_FILE DATA_DIR "/settings.txt"
 #define LOG_FILE      DATA_DIR "/log.txt"
 #define LOG_PREV_FILE DATA_DIR "/log_prev.txt"
-#define APP_VERSION   "1.34-media-playback-test31"
+#define APP_VERSION   "1.34-media-playback-test32"
 
 #define MAX_ITEMS 100
 
@@ -1247,6 +1247,7 @@ static void play_selected(void)
     pp.chat_nick = g_logged ? g_auth.login : NULL;
     pp.chat_oauth = g_logged ? g_auth.access : NULL;
     pp.chat_sender_id = g_logged ? g_auth.user_id : NULL;
+    pp.chat_session=g_logged&&!g_auth_checking?&g_auth:NULL;
     pp.chat_on = &g_chat_on;
     pp.viewer_count = &play_viewers;
     pp.variants=play_list;pp.variant_count=play_count;pp.variant_current=sel;
@@ -1264,6 +1265,7 @@ static void play_selected(void)
     LOGI("quality flow: player returned %d",r);
     scePowerSetArmClockFrequency(333);
     settings_save();
+    if(g_logged&&g_remember&&!g_auth_checking)auth_save(&g_auth,AUTH_FILE);
     if(r==PLAYER_CREATE_CLIP){clip_dialog(login,NULL,0,play_list[sel],&live_capture);r=PLAYER_RECONNECT;retries=0;}
     if(r==PLAYER_CHANNEL_VIDEOS||r==PLAYER_FULL_PROFILE){twitch_stream_t channel={0};snprintf(channel.login,sizeof(channel.login),"%s",login);snprintf(channel.display,sizeof(channel.display),"%s",display);snprintf(channel.avatar,sizeof(channel.avatar),"%s",channel_avatar);channel.live=1;channel.viewers=play_viewers;snprintf(channel.title,sizeof(channel.title),"%s",clean_title);if(r==PLAYER_FULL_PROFILE)channel_full_profile(&channel,0,1);else recordings_screen(&channel);r=PLAYER_RECONNECT;retries=0;}
     if(r==PLAYER_CHANGE_QUALITY&&requested>=0&&requested<play_count&&requested!=sel){
@@ -1945,9 +1947,11 @@ static void clip_dialog(const char *login,const twitch_media_t *v,int pos,const 
         snprintf(lp,sizeof(lp),"%s: %s",vt_lang_current()==2?"Repetir prévia":"Loop preview",loop?"ON":"OFF");
         const char *labels[]={d,range,tl,vt_lang_current()==2?"Pré-visualizar":"Preview",lp,vt_lang_current()==2?"Publicar":"Publish",vt_lang_current()==2?"Cancelar":"Cancel"};
         for(int i=0;i<7;i++){int yy=106+i*46;ui_round_rect(140,yy,680,42,5,selected==i?C_PURPLE:C_PANEL);ui_text_fit(154,yy+28,652,C_WHITE,.96f,labels[i]);}
+        if(total>0){int sx=140+(int)(680LL*(end-duration)/total),ex=140+(int)(680LL*end/total);ui_round_rect(140,434,680,8,3,C_PANEL);if(ex>sx)ui_round_rect(sx,434,ex-sx,8,3,C_PURPLE);}
         ui_text_fit(140,451,680,C_GREY,.78f,vt_lang_current()==2?"Direcional ajusta duração/fim; prévia alinhada ao segmento HLS.":"D-pad adjusts duration/end; preview is HLS segment-aligned.");
         ui_text_fit(140,475,680,C_GREY,.78f,vt_lang_current()==2?"Confirme Publicar para enviar à Twitch.":"Select Publish to send to Twitch.");frame_end();
     }
+    if(g_logged&&!g_auth_checking){auth_job_t check={0};check.a=g_auth;task_t session={0};if(run_with_spinner(&session,auth_check_run,&check,"Validating Twitch session...")<0)return;if(session.result!=0){modal_message("Twitch",check.err);return;}g_auth=check.a;if(g_remember)auth_save(&g_auth,AUTH_FILE);}
     twitch_clip_job_t j={0};snprintf(j.login,sizeof(j.login),"%s",login?login:"");snprintf(j.oauth,sizeof(j.oauth),"%s",g_auth.access);snprintf(j.user_id,sizeof(j.user_id),"%s",g_auth.user_id);
     j.duration=duration;j.offset=end;snprintf(j.title,sizeof(j.title),"%s",title);
     if(v){snprintf(j.vod_id,sizeof(j.vod_id),"%s",v->id);snprintf(j.broadcaster,sizeof(j.broadcaster),"%s",v->broadcaster);}
@@ -1956,24 +1960,26 @@ static void clip_dialog(const char *login,const twitch_media_t *v,int pos,const 
     else if(j.id[0])modal_message(vt_lang_current()==2?"Clipe ainda não confirmado":"Clip not confirmed",j.url);
     else if(rc==0)modal_message("Clips",j.error[0]?j.error:"Clip failed");
 }
-typedef struct {char id[80],url[M3U8_URL_MAX],err[192],vod[32];int height,rc,offset;} clip_mp4_job_t;
-static int clip_mp4_job_run(void *arg,volatile int *abort_flag){clip_mp4_job_t *j=arg;j->rc=twitch_clip_mp4(j->id,j->url,sizeof(j->url),&j->height,j->err,sizeof(j->err),j->vod,sizeof(j->vod),&j->offset,abort_flag);return j->rc;}
+typedef struct {char id[80],url[M3U8_URL_MAX],err[192],vod[32];int width,height,rc,offset,max_height;float fps;} clip_mp4_job_t;
+extern int hls_clip_probe(const char *url,int *w,int *h,float *fps,volatile int *abort);
+static int clip_mp4_job_run(void *arg,volatile int *abort_flag){clip_mp4_job_t *j=arg;j->rc=twitch_clip_mp4(j->id,j->max_height,j->url,sizeof(j->url),&j->height,j->err,sizeof(j->err),j->vod,sizeof(j->vod),&j->offset,abort_flag);if(!j->rc){int w=0,h=0;float fps=0;if(!hls_clip_probe(j->url,&w,&h,&fps,abort_flag)){j->width=w;j->height=h;j->fps=fps;}else{j->width=(j->height*16/9+1)&~1;j->fps=30;}}return j->rc;}
 static int play_clip_mp4(twitch_media_t *v,char *failure,size_t failure_cap,int can_previous,int can_next,int *position){
-    static clip_mp4_job_t j;memset(&j,0,sizeof(j));j.rc=-1;snprintf(j.id,sizeof(j.id),"%s",v->id);snprintf(j.vod,sizeof(j.vod),"%s",v->vod_id);j.offset=v->offset;
+    static clip_mp4_job_t j;memset(&j,0,sizeof(j));j.rc=-1;j.max_height=480;snprintf(j.id,sizeof(j.id),"%s",v->id);snprintf(j.vod,sizeof(j.vod),"%s",v->vod_id);j.offset=v->offset;
     task_t task={0};if(run_with_spinner(&task,clip_mp4_job_run,&j,"Clip MP4...")<0)return 0;
     if(j.rc<0){snprintf(failure,failure_cap,"%s",j.err);if(j.vod[0]&&j.offset>=0){snprintf(v->vod_id,sizeof(v->vod_id),"%s",j.vod);v->offset=j.offset;}return -1;}
     int pos=*position;
+    int quality_retry=0;
     for(;;){
     player_params_t pp={0};char err[192]="";int target=pos;
     pp.recorded=2;pp.media_navigation=1;pp.can_previous=can_previous;pp.can_next=can_next;
     pp.duration_seconds=v->seconds>0?v->seconds:60;pp.start_seconds=pos;pp.position_seconds=&pos;pp.seek_requested=&target;pp.loading_backdrop=g_media_backdrop;
-    pp.url=j.url;pp.channel=v->channel;pp.title=v->title;pp.quality="MP4";pp.height=j.height;pp.width=(j.height*16/9+1)&~1;pp.fps=30;
+    pp.url=j.url;pp.channel=v->channel;pp.title=v->title;pp.quality="MP4";pp.height=j.height;pp.width=j.width;pp.fps=j.fps;
     pp.font=ui_font;pp.btn_back=g_btn_back;pp.profile=g_profile;pp.volume=&g_volume;
     scePowerSetArmClockFrequency(vt_profile_clock(g_profile,pp.height,pp.fps));int rc=player_run(&pp,err,sizeof(err));scePowerSetArmClockFrequency(333);
     *position=pos;
     if(rc==PLAYER_SEEK){pos=target;*position=pos;continue;}
     if(rc==PLAYER_PREVIOUS_MEDIA||rc==PLAYER_NEXT_MEDIA)return rc;
-    if(rc<0||rc==PLAYER_RECONNECT){snprintf(failure,failure_cap,"%s",err[0]?err:"MP4 playback failed");return -1;}return 0;
+    if(rc<0||rc==PLAYER_RECONNECT){snprintf(failure,failure_cap,"%s",err[0]?err:"MP4 playback failed");if(!quality_retry&&j.height>160){quality_retry=1;j.max_height=j.height-1;j.rc=-1;task_t lower={0};if(run_with_spinner(&lower,clip_mp4_job_run,&j,"Clip MP4: lower quality...")>=0&&j.rc==0)continue;}return -1;}return 0;
     }
 }
 static int recorded_play(twitch_media_t *v,int can_previous,int can_next){

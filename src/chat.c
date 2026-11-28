@@ -1,5 +1,6 @@
 #include "i18n.h"
 #include "chat.h"
+#include "auth.h"
 #include "json.h"
 #include "log.h"
 #include "text.h"
@@ -612,8 +613,14 @@ static struct {
     volatile int stop;         /* curl abort flag */
     volatile int alive;
     pthread_t thread;
-    int thread_started;
+    int thread_started,sender_started;
+    pthread_t sender_thread;
+    auth_t session;
+    char broadcaster[24],notice[160];
+    unsigned long long validated_at;
 } C;
+static auth_t *chat_session;
+void chat_set_session(auth_t *a){chat_session=a;}
 
 static void set_status(const char *fmt, ...)
 {
@@ -796,7 +803,16 @@ done:
 static int send_native_message(const char *message,char *reason,size_t cap)
 {
     /* Run on chat worker, not the player/UI. Do not retry a POST automatically. */
-    char url[160],escaped[1024],payload[1200],response[4096],broadcaster[24]="";
+    char url[160],escaped[1024],payload[1200],response[4096];
+    unsigned long long now=sceKernelGetProcessTimeWide();
+    if(!C.validated_at||now-C.validated_at>1800000000ULL){
+        char err[160];
+        if(C.session.access[0]){
+            int a=auth_ensure_token(&C.session,err,sizeof(err),&C.stop);
+            if(a){snprintf(reason,cap,a==-1?"TOKEN INVALID - LOGIN":"SESSION NETWORK");return -1;}
+            snprintf(C.oauth,sizeof(C.oauth),"%s",C.session.access);
+        }
+    }
     const char *stage="TLS";
     int ssl=0,http=0,rc=-1,status=0,ret=-1;
     if(!numeric_id(C.sender_id)||twitch_json_escape(message,escaped,sizeof(escaped))<0){snprintf(reason,cap,"AUTH");return -1;}
@@ -809,10 +825,14 @@ static int send_native_message(const char *message,char *reason,size_t cap)
     rc=sceHttpInit(1024*1024);if(rc<0)goto done;http=1;
     rc=sceHttpsEnableOption(CHAT_VERIFY_FLAGS);if(rc<0)goto done;
     /* Verify the actual issued scopes, not just those requested in device flow. */
+    if(!C.validated_at||now-C.validated_at>1800000000ULL){
     stage="VALIDATE";
     rc=native_helix("https://id.twitch.tv/oauth2/validate",NULL,response,sizeof(response),&status,1);
     if(rc<0||status!=200)goto done;
     if(chat_validate_identity(response,TWITCH_CLIENT_ID,C.sender_id,reason,cap)<0)goto cleanup;
+    C.validated_at=now;
+    }
+    if(!C.broadcaster[0]){
     /* Resolve the channel using verified Helix, not unverified IRC ROOMSTATE. */
     stage="USERS";
     snprintf(url,sizeof(url),"https://api.twitch.tv/helix/users?login=%s",C.login);
@@ -822,14 +842,15 @@ static int send_native_message(const char *message,char *reason,size_t cap)
     json_t *user=json_at(json_get(root,"data"),0);
     const char *id=json_str(user,"id","");
     const char *login=json_str(user,"login","");
-    if(numeric_id(id)&&!strcmp(login,C.login))snprintf(broadcaster,sizeof(broadcaster),"%s",id);
+    if(numeric_id(id)&&!strcmp(login,C.login))snprintf(C.broadcaster,sizeof(C.broadcaster),"%s",id);
     json_free(root);
-    if(!broadcaster[0]){snprintf(reason,cap,"CHANNEL");goto cleanup;}
-    int n=snprintf(payload,sizeof(payload),"{\"broadcaster_id\":\"%s\",\"sender_id\":\"%s\",\"message\":\"%s\"}",broadcaster,C.sender_id,escaped);
+    if(!C.broadcaster[0]){snprintf(reason,cap,"CHANNEL");goto cleanup;}
+    }
+    int n=snprintf(payload,sizeof(payload),"{\"broadcaster_id\":\"%s\",\"sender_id\":\"%s\",\"message\":\"%s\"}",C.broadcaster,C.sender_id,escaped);
     if(n<0||n>=(int)sizeof(payload)){snprintf(reason,cap,"MESSAGE");goto cleanup;}
     status=0;stage="SEND";
     rc=native_helix("https://api.twitch.tv/helix/chat/messages",payload,response,sizeof(response),&status,0);
-    if(rc<0||status!=200)goto done;
+    if(rc<0||status!=200){if(status==401)C.validated_at=0;goto done;}
     int outcome=chat_parse_send_result(response,reason,cap);
     if(outcome==0){
         LOGI("chat: Helix confirmed message_id and is_sent=true (sceHttp)");ret=0;
@@ -854,6 +875,39 @@ cleanup:
     if(ssl)sceSslTerm();
     http_native_unlock();
     return ret;
+}
+static void *chat_sender_thread(void *argp){
+    (void)argp;
+    while(C.running){
+            char outgoing[CHAT_TEXT_MAX]="";
+            pthread_mutex_lock(&C.lock);
+            if(C.queued){snprintf(outgoing,sizeof(outgoing),"%s",C.outgoing);C.queued=0;C.awaiting=1;C.outgoing[0]=0;}
+            pthread_mutex_unlock(&C.lock);
+            if(outgoing[0]){
+                char reason[64]="",notice[160];
+                int sent=send_native_message(outgoing,reason,sizeof(reason));
+                pthread_mutex_lock(&C.lock);C.awaiting=0;pthread_mutex_unlock(&C.lock);
+                if(sent<0&&!C.stop){
+                    const int pt=!strcmp(vt_lang_code(vt_lang_current()),"pt-BR");
+                    const char *explanation=NULL;
+                    if(!strcmp(reason,"automod_held"))explanation=pt?"Mensagem retida pelo AutoMod":"Message held by AutoMod";
+                    else if(!strcmp(reason,"msg_duplicate"))explanation=pt?"Mensagem repetida; aguarde 30 s":"Duplicate message; wait 30 s";
+                    else if(!strcmp(reason,"followers_only_mode"))explanation=pt?"Chat apenas para seguidores":"Followers-only chat";
+                    else if(!strcmp(reason,"subs_only_mode"))explanation=pt?"Chat apenas para inscritos":"Subscribers-only chat";
+                    else if(!strcmp(reason,"emote_only_mode"))explanation=pt?"Chat apenas para emotes":"Emote-only chat";
+                    else if(!strcmp(reason,"slow_mode"))explanation=pt?"Modo lento; aguarde":"Slow mode; please wait";
+                    else if(!strcmp(reason,"verified_account")||!strcmp(reason,"verified_phone_number"))explanation=pt?"Conta precisa de verificacao":"Account verification required";
+                    else if(!strcmp(reason,"user_banned")||!strcmp(reason,"user_timed_out")||!strcmp(reason,"user_warned"))explanation=pt?"Restricao de moderacao do canal":"Channel moderation restriction";
+                    else if(!strcmp(reason,"INVALID_RESPONSE"))explanation=pt?"Resposta da Twitch nao reconhecida":"Unexpected Twitch response";
+                    snprintf(notice,sizeof(notice),"%s [%s]",explanation?explanation:vt_msg("Failed to send chat message"),reason);
+                    set_status("%s",reason);pthread_mutex_lock(&C.lock);snprintf(C.notice,sizeof(C.notice),"%s",notice);pthread_mutex_unlock(&C.lock);
+                }else if(!C.stop){set_status(vt_msg("Conectado"));pthread_mutex_lock(&C.lock);snprintf(C.notice,sizeof(C.notice),"%s",!strcmp(vt_lang_code(vt_lang_current()),"pt-BR")?"Mensagem enviada":"Message sent");pthread_mutex_unlock(&C.lock);}
+                /* Anonymous IRC receives the actual broadcast echo; do not fabricate it. */
+            }
+
+        sceKernelDelayThread(50000);
+    }
+    return NULL;
 }
 static void *chat_thread(void *argp)
 {
@@ -888,31 +942,9 @@ static void *chat_thread(void *argp)
         size_t have=0;unsigned long long last_rx=sceKernelGetProcessTimeWide();
         int join_reported=0;
         while(ok&&C.running){
-            char outgoing[CHAT_TEXT_MAX]="";
-            pthread_mutex_lock(&C.lock);
-            if(C.queued){snprintf(outgoing,sizeof(outgoing),"%s",C.outgoing);C.queued=0;C.awaiting=1;C.outgoing[0]=0;}
-            pthread_mutex_unlock(&C.lock);
-            if(outgoing[0]){
-                char reason[64]="",notice[160];
-                int sent=send_native_message(outgoing,reason,sizeof(reason));
-                pthread_mutex_lock(&C.lock);C.awaiting=0;pthread_mutex_unlock(&C.lock);
-                if(sent<0&&!C.stop){
-                    const int pt=!strcmp(vt_lang_code(vt_lang_current()),"pt-BR");
-                    const char *explanation=NULL;
-                    if(!strcmp(reason,"automod_held"))explanation=pt?"Mensagem retida pelo AutoMod":"Message held by AutoMod";
-                    else if(!strcmp(reason,"msg_duplicate"))explanation=pt?"Mensagem repetida; aguarde 30 s":"Duplicate message; wait 30 s";
-                    else if(!strcmp(reason,"followers_only_mode"))explanation=pt?"Chat apenas para seguidores":"Followers-only chat";
-                    else if(!strcmp(reason,"subs_only_mode"))explanation=pt?"Chat apenas para inscritos":"Subscribers-only chat";
-                    else if(!strcmp(reason,"emote_only_mode"))explanation=pt?"Chat apenas para emotes":"Emote-only chat";
-                    else if(!strcmp(reason,"slow_mode"))explanation=pt?"Modo lento; aguarde":"Slow mode; please wait";
-                    else if(!strcmp(reason,"verified_account")||!strcmp(reason,"verified_phone_number"))explanation=pt?"Conta precisa de verificacao":"Account verification required";
-                    else if(!strcmp(reason,"user_banned")||!strcmp(reason,"user_timed_out")||!strcmp(reason,"user_warned"))explanation=pt?"Restricao de moderacao do canal":"Channel moderation restriction";
-                    else if(!strcmp(reason,"INVALID_RESPONSE"))explanation=pt?"Resposta da Twitch nao reconhecida":"Unexpected Twitch response";
-                    snprintf(notice,sizeof(notice),"%s [%s]",explanation?explanation:vt_msg("Failed to send chat message"),reason);
-                    set_status("%s",reason);push_system(notice);
-                }else if(!C.stop)set_status(vt_msg("Conectado"));
-                /* Anonymous IRC receives the actual broadcast echo; do not fabricate it. */
-            }
+            char notice[160]="";pthread_mutex_lock(&C.lock);
+            if(C.notice[0]){snprintf(notice,sizeof(notice),"%s",C.notice);C.notice[0]=0;}
+            pthread_mutex_unlock(&C.lock);if(notice[0])push_system(notice);
             if(room_id[0]&&!emotes_done){emotes_done=1;load_badges(room_id);load_7tv(room_id);load_extra_emotes(room_id);}
             size_t got=0;CURLcode rc=curl_easy_recv(c,rbuf+have,sizeof(rbuf)-1-have,&got);
             if(rc==CURLE_AGAIN){
@@ -940,8 +972,6 @@ static void *chat_thread(void *argp)
             have=strlen(start);memmove(rbuf,start,have+1);if(have>=sizeof(rbuf)-1)have=0;
         }
         if(c)curl_easy_cleanup(c);
-        pthread_mutex_lock(&C.lock);int lost=C.queued;C.queued=C.awaiting=0;C.outgoing[0]=0;pthread_mutex_unlock(&C.lock);
-        if(lost&&!C.stop)push_system(vt_msg("Failed to send chat message"));
         if(!C.running)break;
         set_status(vt_msg("Chat desconectado, reintentando en %d s..."),backoff);
         for(int i=0;i<backoff*10&&C.running;i++)sceKernelDelayThread(100000);
@@ -972,6 +1002,8 @@ void chat_start(const char *login,const char *nick,const char *oauth,const char 
         snprintf(C.nick,sizeof(C.nick),"%s",nick);snprintf(C.oauth,sizeof(C.oauth),"%s",oauth);if(numeric_id(sender_id))snprintf(C.sender_id,sizeof(C.sender_id),"%s",sender_id);
     }
     C.writable=C.oauth[0]&&numeric_id(C.sender_id);
+    C.validated_at=0;C.broadcaster[0]=C.notice[0]=0;memset(&C.session,0,sizeof(C.session));
+    if(chat_session&&C.writable&&!strcmp(chat_session->user_id,C.sender_id))C.session=*chat_session;
     C.version++;
     twitch_sanitize_login(login,C.login,sizeof(C.login));
     snprintf(C.status, sizeof(C.status), "%s", vt_msg("Conectando al chat..."));
@@ -992,6 +1024,7 @@ void chat_start(const char *login,const char *nick,const char *oauth,const char 
         set_status(vt_msg("Chat desconectado, reintentando en %d s..."), 0);
     } else {
         C.thread_started = 1;
+        if(C.writable){pthread_attr_t sa;int sr=pthread_attr_init(&sa);if(!sr){sr=pthread_attr_setstacksize(&sa,128*1024);if(!sr)sr=pthread_create(&C.sender_thread,&sa,chat_sender_thread,NULL);pthread_attr_destroy(&sa);}if(!sr)C.sender_started=1;else{pthread_mutex_lock(&C.lock);C.writable=0;pthread_mutex_unlock(&C.lock);LOGW("chat: sender worker failed");}}
     }
 }
 
@@ -1003,7 +1036,9 @@ void chat_stop(void)
         pthread_join(C.thread, NULL);
         C.thread_started = 0;
     }
-    memset(C.oauth,0,sizeof(C.oauth));C.nick[0]=0;
+    if(C.sender_started){pthread_join(C.sender_thread,NULL);C.sender_started=0;}
+    if(chat_session&&C.session.access[0]&&!strcmp(chat_session->user_id,C.session.user_id))*chat_session=C.session;
+    memset(&C.session,0,sizeof(C.session));memset(C.oauth,0,sizeof(C.oauth));C.nick[0]=0;
 }
 
 int chat_retry_auth(void){return 0;}

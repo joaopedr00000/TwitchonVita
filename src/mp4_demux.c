@@ -469,7 +469,7 @@ static int flat_init(flat_track_t *t,mp4_demux_t *d,const box_t *trak){
     if(flat_table(&stbl,"stss",&t->stss,4)<0)memset(&t->stss,0,sizeof(t->stss));
     return flat_chunk(t);
 }
-static int flat_emit(mp4_demux_t *d,flat_track_t *t,const uint8_t *data,size_t len){
+static int flat_emit(mp4_demux_t *d,flat_track_t *t,const uint8_t *data,size_t len,mp4_read_at read,void *ctx){
     uint32_t size=t->fixed?t->fixed:rd32(t->stsz.p+12+(size_t)t->idx*4);
     if(!size||t->off>len||size>len-t->off)return -1;
     if(!t->ts_left){if(t->ts>=rd32(t->stts.p+4))return -1;t->ts_left=flat_val(&t->stts,t->ts,8,0);if(!t->ts_left)return -1;}
@@ -479,16 +479,18 @@ static int flat_emit(mp4_demux_t *d,flat_track_t *t,const uint8_t *data,size_t l
     int sync=!t->stss.p;
     if(t->stss.p&&t->sync<rd32(t->stss.p+4)&&flat_val(&t->stss,t->sync,4,0)==t->idx+1){sync=1;t->sync++;}
     int64_t pts=to90k(t->dt+comp,t->track->timescale),dts=to90k(t->dt,t->track->timescale);
-    int rc=!d?0:t->track->is_video?emit_video(d,data+(size_t)t->off,size,sync,pts,dts):emit_audio(d,data+(size_t)t->off,size,pts);
+    const uint8_t *sample=NULL;
+    if(d){sample=read?read(ctx,t->off,size):data+(size_t)t->off;if(!sample)return -1;}
+    int rc=!d?0:t->track->is_video?emit_video(d,sample,size,sync,pts,dts):emit_audio(d,sample,size,pts);
     if(rc<0)return -1;
     t->dt+=flat_val(&t->stts,t->ts,8,4);if(!--t->ts_left)t->ts++;
     t->idx++;t->off+=size;if(!--t->in_chunk&&t->idx<t->count){t->chunk++;if(flat_chunk(t)<0)return -1;}
     return 0;
 }
-int mp4_demux_file_seek(mp4_demux_t *d,const uint8_t *data,size_t len,int start,volatile int *actual){
+static int flat_seek(mp4_demux_t *d,const uint8_t *data,size_t meta_len,size_t len,mp4_read_at read,void *ctx,int start,volatile int *actual){
     box_t moov,b;size_t pos=0;flat_track_t tracks[4];int n=0,video=0;
-    if(mp4_demux_set_init(d,data,len)<0||find_box(data,len,"moov",&moov)<0)return -1;
-    if(find_box(moov.p,moov.len,"mvex",&b)==0){if(actual)*actual=0;return start>0?-1:mp4_demux_feed(d,data,len);}
+    if(mp4_demux_set_init(d,data,meta_len)<0||find_box(data,meta_len,"moov",&moov)<0)return -1;
+    if(find_box(moov.p,moov.len,"mvex",&b)==0){if(actual)*actual=0;return start>0||read?-1:mp4_demux_feed(d,data,len);}
     while(next_box(moov.p,moov.len,&pos,&b)==0)if(!memcmp(b.type,"trak",4)){
         if(n>=4)return -1;
         int rc=flat_init(&tracks[n],d,&b);if(rc<0)return -1;if(rc>0)continue;
@@ -501,13 +503,13 @@ int mp4_demux_file_seek(mp4_demux_t *d,const uint8_t *data,size_t len,int start,
             flat_track_t walk=tracks[i],best=walk;
             while(walk.idx<walk.count&&to90k(walk.dt,walk.track->timescale)<=(int64_t)start*90000){
                 if(!walk.stss.p||(walk.sync<rd32(walk.stss.p+4)&&flat_val(&walk.stss,walk.sync,4,0)==walk.idx+1))best=walk;
-                if(flat_emit(NULL,&walk,data,len)<0)return -1;
+                if(flat_emit(NULL,&walk,data,len,read,ctx)<0)return -1;
             }
             tracks[i]=best;anchor=to90k(best.dt,best.track->timescale);break;
         }
         for(int i=0;i<n;i++)if(!tracks[i].track->is_video){
             while(tracks[i].idx+1<tracks[i].count&&to90k(tracks[i].dt,tracks[i].track->timescale)<anchor)
-                if(flat_emit(NULL,&tracks[i],data,len)<0)return -1;
+                if(flat_emit(NULL,&tracks[i],data,len,read,ctx)<0)return -1;
         }
     }
     if(actual)*actual=(int)(anchor/90000);
@@ -515,8 +517,37 @@ int mp4_demux_file_seek(mp4_demux_t *d,const uint8_t *data,size_t len,int start,
         int k=-1;int64_t best=0;
         for(int i=0;i<n;i++)if(tracks[i].idx<tracks[i].count){int64_t ts=to90k(tracks[i].dt,tracks[i].track->timescale);if(k<0||ts<best){k=i;best=ts;}}
         if(k<0)return 0;
-        if(flat_emit(d,&tracks[k],data,len)<0)return -1;
+        if(flat_emit(d,&tracks[k],data,len,read,ctx)<0)return -1;
     }
 }
 
+int mp4_demux_file_seek(mp4_demux_t *d,const uint8_t *data,size_t len,int start,volatile int *actual){
+    return flat_seek(d,data,len,len,NULL,NULL,start,actual);
+}
+int mp4_demux_range_seek(mp4_demux_t *d,const uint8_t *moov,size_t moov_len,size_t file_len,mp4_read_at read,void *ctx,int start,volatile int *actual){
+    if(!read||!moov||!file_len)return -1;
+    return flat_seek(d,moov,moov_len,file_len,read,ctx,start,actual);
+}
+int mp4_clip_info(const uint8_t *data,size_t len,int *width,int *height,float *fps){
+    box_t moov,trak,mdia,b,minf,stbl,stsd,e,stts;size_t pos=0;
+    if(find_box(data,len,"moov",&moov)<0)return -1;
+    while(next_box(moov.p,moov.len,&pos,&trak)==0){
+        if(memcmp(trak.type,"trak",4)||find_box(trak.p,trak.len,"mdia",&mdia)<0||
+           find_box(mdia.p,mdia.len,"hdlr",&b)<0||b.len<12||memcmp(b.p+8,"vide",4))continue;
+        if(find_box(mdia.p,mdia.len,"mdhd",&b)<0||b.len<24)return -1;
+        uint32_t scale=rd32(b.p+(b.p[0]==1?20:12));
+        if(!scale||find_box(mdia.p,mdia.len,"minf",&minf)<0||find_box(minf.p,minf.len,"stbl",&stbl)<0||
+           find_box(stbl.p,stbl.len,"stsd",&stsd)<0||stsd.len<8)return -1;
+        size_t ep=8;if(next_box(stsd.p,stsd.len,&ep,&e)<0||e.len<78||(memcmp(e.type,"avc1",4)&&memcmp(e.type,"avc3",4)))return -1;
+        int w=rd16(e.p+24),h=rd16(e.p+26);
+        if(w<16||h<16||w>1280||h>720)return -1;
+        if(flat_table(&stbl,"stts",&stts,8)<0)return -1;
+        uint64_t frames=0,ticks=0;uint32_t entries=rd32(stts.p+4);
+        if(entries>20000)return -1;
+        for(uint32_t i=0;i<entries;i++){uint32_t n=flat_val(&stts,i,8,0),dt=flat_val(&stts,i,8,4);if(!n||!dt||frames+n>20000)return -1;frames+=n;ticks+=(uint64_t)n*dt;}
+        double f=ticks?(double)frames*scale/ticks:0;if(f<1||f>60.1)return -1;
+        *width=w;*height=h;*fps=(float)f;return 0;
+    }
+    return -1;
+}
 int mp4_demux_file(mp4_demux_t *d,const uint8_t *data,size_t len){return mp4_demux_file_seek(d,data,len,0,NULL);}

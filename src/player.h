@@ -3,6 +3,7 @@
 
 #include <vita2d.h>
 #include "m3u8.h"
+#include "auth.h"
 
 typedef struct {
     const char *url;        /* media playlist of the chosen quality */
@@ -23,6 +24,7 @@ typedef struct {
     const char *chat_nick;  /* logged-in Twitch account (nullable) */
     const char *chat_oauth; /* OAuth token with user:write:chat (nullable) */
     const char *chat_sender_id;
+    auth_t *chat_session;
     int profile;
     int recorded,start_seconds,duration_seconds;
     int timeline_offset; /* source VOD offset for a clip; display relative position */

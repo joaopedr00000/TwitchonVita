@@ -2,6 +2,7 @@
 #include "log.h"
 
 #include <string.h>
+#include <stdio.h>
 #include <pthread.h>
 #include <psp2/net/http.h>
 #include <psp2/libssl.h>
@@ -115,10 +116,13 @@ static pthread_mutex_t native_lock=PTHREAD_MUTEX_INITIALIZER;
 void http_native_lock(void){pthread_mutex_lock(&native_lock);}
 void http_native_unlock(void){pthread_mutex_unlock(&native_lock);}
 #define VT_NATIVE_VERIFY (SCE_HTTPS_FLAG_SERVER_VERIFY | SCE_HTTPS_FLAG_CN_CHECK | SCE_HTTPS_FLAG_NOT_AFTER_CHECK | SCE_HTTPS_FLAG_NOT_BEFORE_CHECK | SCE_HTTPS_FLAG_KNOWN_CA_CHECK)
-int http_native_read(const char *url,const char *body,const char *oauth,int gql,buf_t *out,long *status,volatile int *abort_flag){
+static int native_request(const char *url,const char *body,const char *oauth,int gql,int mode,const char *range,unsigned long long *total,buf_t *out,long *status,volatile int *abort_flag){
     /* API credentials are restricted to fixed hosts. CDN requests are anonymous. */
     int api=!strncmp(url,"https://api.twitch.tv/helix/",sizeof("https://api.twitch.tv/helix/")-1)||!strcmp(url,"https://gql.twitch.tv/gql");
-    if(!api){
+    int identity=!strcmp(url,"https://id.twitch.tv/oauth2/validate")||!strcmp(url,"https://id.twitch.tv/oauth2/token")||!strcmp(url,"https://id.twitch.tv/oauth2/device");
+    if(mode==1&&(!body||*body||!oauth||!( !strncmp(url,"https://api.twitch.tv/helix/clips?",sizeof("https://api.twitch.tv/helix/clips?")-1)||!strncmp(url,"https://api.twitch.tv/helix/videos/clips?",sizeof("https://api.twitch.tv/helix/videos/clips?")-1))))return -CURLE_BAD_FUNCTION_ARGUMENT;
+    if(mode==2&&!identity)return -CURLE_BAD_FUNCTION_ARGUMENT;
+    if(!api&&!identity){
         if(oauth||body||gql||strncmp(url,"https://",8)||strpbrk(url,"\r\n\\")||strlen(url)>16383)return -CURLE_BAD_FUNCTION_ARGUMENT;
         const char *host=url+8,*end=strchr(host,'/');
         if(!end||end==host)return -CURLE_BAD_FUNCTION_ARGUMENT;
@@ -132,7 +136,9 @@ int http_native_read(const char *url,const char *body,const char *oauth,int gql,
         if(!valid)return -CURLE_BAD_FUNCTION_ARGUMENT;
     }
     if(oauth&&(strlen(oauth)>100||strpbrk(oauth,"\r\n")))return -CURLE_BAD_FUNCTION_ARGUMENT;
-    if(body&&(!gql||strstr(body,"mutation")))return -CURLE_BAD_FUNCTION_ARGUMENT;
+    if(body&&!mode&&(!gql||strstr(body,"mutation")))return -CURLE_BAD_FUNCTION_ARGUMENT;
+    if(identity&&mode!=2)return -CURLE_BAD_FUNCTION_ARGUMENT;
+    if(range&&(api||identity||body||oauth))return -CURLE_BAD_FUNCTION_ARGUMENT;
     *status=0;buf_reset(out);if(out->data)out->data[0]=0;
     int ssl=0,http=0,tpl=-1,conn=-1,req=-1,rc=-1,code=0;const char *stage="module";
     char auth[160]="",chunk[4096];http_native_lock();
@@ -150,14 +156,28 @@ int http_native_read(const char *url,const char *body,const char *oauth,int gql,
     stage="connection";NATIVE(conn=sceHttpCreateConnectionWithURL(tpl,url,SCE_HTTP_DISABLE));
     NATIVE(req=sceHttpCreateRequestWithURL(conn,body?SCE_HTTP_METHOD_POST:SCE_HTTP_METHOD_GET,url,body?strlen(body):0));
     if(api)NATIVE(sceHttpAddRequestHeader(req,"Client-Id",TWITCH_CLIENT_ID,SCE_HTTP_HEADER_OVERWRITE));
-    if(oauth&&*oauth){snprintf(auth,sizeof(auth),"%s %s",gql?"OAuth":"Bearer",oauth);NATIVE(sceHttpAddRequestHeader(req,"Authorization",auth,SCE_HTTP_HEADER_OVERWRITE));}
+    if(oauth&&*oauth){snprintf(auth,sizeof(auth),"%s %s",(gql||identity)?"OAuth":"Bearer",oauth);NATIVE(sceHttpAddRequestHeader(req,"Authorization",auth,SCE_HTTP_HEADER_OVERWRITE));}
     NATIVE(sceHttpAddRequestHeader(req,"Accept-Encoding","identity",SCE_HTTP_HEADER_OVERWRITE));
-    if(body)NATIVE(sceHttpAddRequestHeader(req,"Content-Type","text/plain;charset=UTF-8",SCE_HTTP_HEADER_OVERWRITE));
+    if(body)NATIVE(sceHttpAddRequestHeader(req,"Content-Type",mode==2?"application/x-www-form-urlencoded":mode==1?"application/json":"text/plain;charset=UTF-8",SCE_HTTP_HEADER_OVERWRITE));
+    if(range)NATIVE(sceHttpAddRequestHeader(req,"Range",range,SCE_HTTP_HEADER_OVERWRITE));
     stage="send";if(abort_flag&&*abort_flag){rc=-1;goto done;}NATIVE(sceHttpSendRequest(req,body,body?(unsigned)strlen(body):0));
     NATIVE(sceHttpGetStatusCode(req,&code));*status=code;
-    size_t limit=api?2u*1024u*1024u:16u*1024u*1024u;
+    size_t limit=(api||identity)?2u*1024u*1024u:16u*1024u*1024u;
+    if(range){
+        char *headers=NULL;unsigned int hn=0,vn=0;const char *value=NULL;
+        unsigned long long start=0,end=0,full=0,want=0,last=0;char tail[128];
+        if(code!=206){rc=-1;goto done;}
+        NATIVE(sceHttpGetAllResponseHeaders(req,&headers,&hn));
+        NATIVE(sceHttpParseResponseHeader(headers,hn,"Content-Range",&value,&vn));
+        if(!value||vn>=sizeof(tail)){rc=-1;goto done;}
+        memcpy(tail,value,vn);tail[vn]=0;
+        if(sscanf(range,"bytes=%llu-%llu",&want,&last)!=2||sscanf(tail,"bytes %llu-%llu/%llu",&start,&end,&full)!=3||
+           start!=want||end<start||end>last||end>=full||end!=(last<full?last:full-1)||full>64ULL*1024*1024){rc=-1;goto done;}
+        if(*total&&*total!=full){rc=-1;goto done;}
+        *total=full;limit=(size_t)(end-start+1);
+    }
     stage="read";while(!(abort_flag&&*abort_flag)){
-        int n=sceHttpReadData(req,chunk,sizeof(chunk));if(n<0){rc=n;goto done;}if(!n){rc=0;goto done;}
+        int n=sceHttpReadData(req,chunk,sizeof(chunk));if(n<0){rc=n;goto done;}if(!n){rc=range&&out->size!=limit?-1:0;goto done;}
         if(out->size>limit||(size_t)n>limit-out->size||buf_append(out,chunk,(size_t)n)<0){rc=-1;goto done;}
     }rc=-1;
 done:
@@ -171,6 +191,20 @@ done:
     return rc<0?-CURLE_SSL_CONNECT_ERROR:0;
 }
 
+int http_native_read(const char *url,const char *body,const char *oauth,int gql,buf_t *out,long *status,volatile int *abort_flag){
+    return native_request(url,body,oauth,gql,0,NULL,NULL,out,status,abort_flag);
+}
+int http_native_clip_post(const char *url,const char *oauth,buf_t *out,long *status,volatile int *abort_flag){
+    return native_request(url,"",oauth,0,1,NULL,NULL,out,status,abort_flag);
+}
+int http_native_identity(const char *url,const char *form,const char *oauth,buf_t *out,long *status,volatile int *abort_flag){
+    return native_request(url,form,oauth,0,2,NULL,NULL,out,status,abort_flag);
+}
+int http_native_range(const char *url,unsigned long long start,size_t count,unsigned long long *total,buf_t *out,long *status,volatile int *abort_flag){
+    if(!count||count>1024u*1024u||start>64ULL*1024*1024||!total)return -CURLE_BAD_FUNCTION_ARGUMENT;
+    char range[80];snprintf(range,sizeof(range),"bytes=%llu-%llu",start,start+count-1);
+    return native_request(url,NULL,NULL,0,0,range,total,out,status,abort_flag);
+}
 /* Prefer native verified transport after a proven CA-file incompatibility.
  * No changes to write/mutation requests; no unverified fallback. A failed
  * native read still allows a verified curl attempt. */

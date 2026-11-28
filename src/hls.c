@@ -100,6 +100,39 @@ static void live_snapshot(m3u8_preview_t *out,const m3u8_media_t *m,long long ne
     out->duration=(int)duration;return;
 fail:out->duration=0;out->text[0]=0;
 }
+#define CLIP_WINDOW (512u*1024u)
+typedef struct {const char *url;volatile int *abort;unsigned long long total;buf_t window[2];uint64_t base[2];int next;long status;} clip_reader_t;
+static void clip_reader_free(clip_reader_t *r){buf_free(&r->window[0]);buf_free(&r->window[1]);}
+static const uint8_t *clip_read(void *ctx,uint64_t off,size_t n){
+    clip_reader_t *r=ctx;if(!n||n>CLIP_WINDOW||(r->total&&(off>r->total||n>r->total-off)))return NULL;
+    for(int i=0;i<2;i++)if(r->window[i].size&&off>=r->base[i]&&off-r->base[i]<=r->window[i].size&&n<=r->window[i].size-(size_t)(off-r->base[i]))return r->window[i].data+(size_t)(off-r->base[i]);
+    int i=r->next;r->next^=1;r->base[i]=off;
+    if(http_native_range(r->url,off,CLIP_WINDOW,&r->total,&r->window[i],&r->status,r->abort)||r->window[i].size<n){buf_reset(&r->window[i]);return NULL;}
+    return r->window[i].data;
+}
+static uint32_t clip_u32(const uint8_t *p){return (uint32_t)p[0]<<24|(uint32_t)p[1]<<16|(uint32_t)p[2]<<8|p[3];}
+static int clip_moov(clip_reader_t *r,buf_t *meta){
+    uint64_t pos=0;
+    for(int boxes=0;boxes<128;boxes++){
+        const uint8_t *p=clip_read(r,pos,8);if(!p)return -1;
+        uint64_t size=clip_u32(p);int moov=!memcmp(p+4,"moov",4);unsigned hdr=8;
+        if(size==1){p=clip_read(r,pos,16);if(!p)return -1;size=(uint64_t)clip_u32(p+8)<<32|clip_u32(p+12);hdr=16;}
+        if(!size)size=r->total-pos;
+        if(size<hdr||pos>r->total||size>r->total-pos)return -1;
+        if(moov){
+            if(size>2u*1024u*1024u)return -1;
+            for(uint64_t i=0;i<size;){size_t n=(size-i>CLIP_WINDOW)?CLIP_WINDOW:(size_t)(size-i);p=clip_read(r,pos+i,n);if(!p||buf_append(meta,p,n)<0)return -1;i+=n;}
+            return 0;
+        }
+        pos+=size;if(pos>=r->total)return -1;
+    }
+    return -1;
+}
+int hls_clip_probe(const char *url,int *w,int *h,float *fps,volatile int *abort){
+    clip_reader_t r={.url=url,.abort=abort};buf_t meta={0};int rc=clip_moov(&r,&meta);
+    if(!rc)rc=mp4_clip_info(meta.data,meta.size,w,h,fps);
+    clip_reader_free(&r);buf_free(&meta);return rc;
+}
 static void *hls_thread(void *argp)
 {
     hls_t *h = argp;
@@ -123,6 +156,20 @@ static void *hls_thread(void *argp)
     }
 
     if(h->recorded==2){
+        clip_reader_t reader={.url=h->url,.abort=&h->abort_req};buf_t meta={0};
+        int probe=clip_moov(&reader,&meta);
+        if(!probe){
+            h->actual_start=0;h->position_ready=1;
+            LOGI("clip: bounded range playback file=%u metadata=%u",(unsigned)reader.total,(unsigned)meta.size);
+            int result=mp4_demux_range_seek(&h->mp4,meta.data,meta.size,(size_t)reader.total,clip_read,&reader,h->start_seconds,&h->actual_start);
+            clip_reader_free(&reader);buf_free(&meta);
+            if(result<0&&h->running)snprintf(h->error,sizeof(h->error),"Clip range playback failed");
+            else if(!result)h->segments_done=1;
+            goto done;
+        }
+        clip_reader_free(&reader);buf_free(&meta);
+        if(h->abort_req)goto done;
+        LOGI("clip: range unavailable, bounded full-file fallback");
         int rc=http_media_get(c,trust,h->url,&seg,&status,&h->abort_req);
         if(rc||status!=200){snprintf(h->error,sizeof(h->error),"Clip MP4 HTTP %ld curl %d",status,-rc);goto done;}
         h->actual_start=0;h->position_ready=1;
