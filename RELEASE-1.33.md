@@ -32,4 +32,8 @@
 
 Thanks to [Dexlei](https://github.com/Dexlei/VitaTwitch) for the original application and [devnoname120](https://github.com/devnoname120/vita_tls_fixer) for TLS Fixer.
 
-The VPK is the exact hardware-approved Keyboard Fix 2 package (SFO version 01.33, title ID VTWI00001). This release does not change the tested executable. SHA-256: `3e8c413297746028c0dd761b52dcab90a192f04181ba1cd386fef5b8ac5232be`.
+**1.33 visual revision:** The sidebar header now displays only the Twitch symbol, centered and enlarged; both text labels were removed. No chat, player, settings or LiveArea changes. SFO version 01.33 and title ID VTWI00001 remain unchanged. The revised VPK is rebuilt and CI-validated; physical-console validation of this visual revision is pending.
+
+**PT-BR:** O cabeçalho agora exibe apenas o símbolo da Twitch, centralizado e ampliado. Sem alteração no chat, player ou LiveArea.
+
+**ES:** La cabecera muestra únicamente el símbolo de Twitch, centrado y ampliado. Sin cambios en chat, reproductor o LiveArea.

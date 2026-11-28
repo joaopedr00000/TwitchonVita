@@ -1,0 +1,159 @@
+name: Publish Twitch 1.33 logo-only revision
+on:
+  push:
+    branches: ['release/v1.33-logo']
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: twitch-vita-feature-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  host-unit-tests:
+    if: github.repository == 'joaopedr00000/TwitchonVita' && github.ref == 'refs/heads/release/v1.33-logo'
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - name: 19 locale catalogs + multilingual keyboard conversion
+        run: |
+          set -euo pipefail
+          gcc -std=c11 -Wall -Wextra -Werror -Isrc tests/i18n_test.c src/i18n.c -o /tmp/vt-locale-test
+          /tmp/vt-locale-test
+          gcc -std=c11 -Wall -Wextra -Werror -Isrc tests/ime_utf8_test.c src/ime_utf8.c -o /tmp/vt-keyboard-test
+          /tmp/vt-keyboard-test
+          gcc -std=c11 -Wall -Wextra -Werror -Isrc tests/playback_policy_test.c src/playback_policy.c -o /tmp/vt-policy-test
+          /tmp/vt-policy-test
+          gcc -std=c11 -Wall -Wextra -Isrc tests/m3u8_ad_test.c src/m3u8.c -o /tmp/vt-m3u8-ad-test
+          /tmp/vt-m3u8-ad-test
+          gcc -DVT_NO_NET -std=gnu11 -Wall -Wextra -Isrc tests/twitch_region_test.c src/twitch.c src/json.c src/log.c src/i18n.c -o /tmp/vt-region-test
+          /tmp/vt-region-test
+          gcc -std=gnu11 -Wall -Wextra -Werror -pthread -Isrc tests/pktqueue_test.c src/pktqueue.c -o /tmp/vt-queue-test
+          /tmp/vt-queue-test
+      - name: IRC message sanitization and UTF-8 security checks
+        run: |
+          set -euo pipefail
+          gcc -DVT_NO_NET -std=gnu11 -Wall -Wextra -Isrc \
+            tests/chat_send_test.c src/chat.c src/json.c src/text.c src/log.c src/i18n.c \
+            -o /tmp/vt-chat-send-test
+          /tmp/vt-chat-send-test
+      - name: Verify Vita source wiring without altering original player codecs
+        run: |
+          set -euo pipefail
+          grep -q 'SceTouch_stub' CMakeLists.txt
+          grep -q 'src/i18n.c' CMakeLists.txt
+          grep -q 'src/ime_utf8.c' CMakeLists.txt
+          grep -Fq 'PASS SCHMOOPIIE' src/chat.c
+          ! grep -Fq 'PASS oauth:' src/chat.c
+          grep -Fq 'sceHttpsEnableOption(CHAT_VERIFY_FLAGS)' src/chat.c
+          grep -Fq 'https://api.twitch.tv/helix/chat/messages' src/chat.c
+          grep -Fq 'user%%3Awrite%%3Achat' src/auth.c
+          grep -Fq 'chat_queue_message(message)' src/player.c
+          grep -Fq 'pthread_create(&C.thread' src/chat.c
+          grep -Fq 'pthread_join(C.thread' src/chat.c
+          grep -Fq 'chat_start(pp->login,pp->chat_nick,pp->chat_oauth,pp->chat_sender_id)' src/player.c
+          grep -Fq 'SCE_CTRL_SELECT' src/player.c
+          grep -Fq 'vt_lang_set_code' src/main.c
+  vita-sdk-vpk:
+    needs: host-unit-tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 70
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download current Mozilla CA bundle for verified Twitch IRC TLS
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p assets
+          curl --fail --location --retry 3 --show-error --silent https://curl.se/ca/cacert.pem -o assets/cacert.pem
+          test "$(grep -c -- '-----BEGIN CERTIFICATE-----' assets/cacert.pem)" -ge 100
+          sha256sum assets/cacert.pem | tee ca-bundle.sha256
+          echo 'The CA file is obtained over verified GitHub Actions runner HTTPS.' >> "$GITHUB_STEP_SUMMARY"
+      - name: Validate embedded CA generation and OpenSSL trust loading on host
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libcurl4-openssl-dev libssl-dev
+          mkdir -p /tmp/vt-ca
+          cmake -DINPUT="$PWD/assets/cacert.pem" -DOUTPUT=/tmp/vt-ca/vt_ca_bundle.h -P cmake/embed_ca.cmake
+          gcc -Wall -Wextra -Werror -Isrc -I/tmp/vt-ca tests/tls_trust_test.c src/tls_trust.c -o /tmp/vt-ca/test $(pkg-config --cflags --libs libcurl openssl)
+          /tmp/vt-ca/test
+      - name: Compile VitaTwitch with VitaSDK (no public release)
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm -v "$PWD:/src" -w /src -e VITASDK=/usr/local/vitasdk \
+            vitasdk/vitasdk:2026.08 bash -lc '
+              set -euo pipefail
+              export PATH="$VITASDK/bin:$PATH"
+              # OpenSSL 1.1.1 is pre-installed in this image; installing the
+              # legacy 'openssl' package causes a conflicting 1.0.2 downgrade.
+              vdpm install libvita2d libpng libjpeg-turbo curl zlib zstd
+              cmake -S . -B build-ci -DCMAKE_BUILD_TYPE=Release
+              # vita_create_vpk target is SDK/version-dependent; build all.
+              cmake --build build-ci -j4
+            '
+      - name: Validate real VPK contents, CA trust store and version
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import pathlib,struct,zipfile
+          pkg=pathlib.Path('build-ci/VitaTwitch.vpk')
+          assert pkg.is_file() and pkg.stat().st_size>500000,pkg
+          with zipfile.ZipFile(pkg) as z:
+            assert z.testzip() is None
+            names=set(z.namelist())
+            assert 'eboot.bin' in names
+            assert 'ca/cacert.pem' in names
+            cert=z.read('ca/cacert.pem')
+            assert cert.count(b'-----BEGIN CERTIFICATE-----')>=100
+            sfo=z.read('sce_sys/param.sfo')
+            assert b'VTWI00001' in sfo
+            assert b'01.33' in sfo
+            assert b'Twitch\x00' in sfo
+            import hashlib
+            artwork = {
+                'sce_sys/icon0.png': 'd5f4b3ee55c88307734df9a14f994df5ab7d385adfef76c83a6c1e3567c19415',
+                'sce_sys/livearea/contents/bg.png': '96ee98839f8290313439b8bd7ef19d0233d0692a13727e030f5c058d53f4729a',
+                'sce_sys/livearea/contents/startup.png': '2265d4173538abd8bfc463105740c0d1ed6fe92b2a7954ad9f7b62b9aa583688',
+                'sce_sys/livearea/contents/template.xml': '574cfaa320985431ce569e3a79acfb78f07cd9a142a8a94e6b69ebe7b3b996e4',
+            }
+            for name, expected in artwork.items():
+                assert hashlib.sha256(z.read(name)).hexdigest() == expected, name
+          source=pathlib.Path('src/main.c').read_text()
+          header=source.split('static void draw_header(void)')[1].split('int active=side_active();')[0]
+          assert '"Twitch"' not in header and '"TwitchonVita"' not in header
+          print('PASS VPK, version 01.33, exact approved artwork and logo-only source')
+          PY
+          cp build-ci/VitaTwitch.vpk Twitch-1.33.vpk
+          sha256sum Twitch-1.33.vpk > SHA256SUMS-release.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Twitch-1.33-LogoRevision
+          path: |
+            Twitch-1.33.vpk
+            SHA256SUMS-release.txt
+            ca-bundle.sha256
+          retention-days: 14
+          if-no-files-found: error
+      - name: Update existing stable 1.33 release after verification
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/release/v1.33-logo
+          sha256sum -c SHA256SUMS-release.txt
+          TAG=v1.33-classic
+          OLD=3c08bbaaa3d95905a1af2161b614b0af0945c800
+          current="$(gh api "repos/$GH_REPO/git/ref/tags/$TAG" --jq .object.sha)"
+          test "$current" = "$OLD"
+          gh release view "$TAG" --repo "$GH_REPO" --json isDraft,isPrerelease --jq '.isDraft == false and .isPrerelease == false' | grep -qx true
+          gh release upload "$TAG" Twitch-1.33.vpk SHA256SUMS-release.txt --repo "$GH_REPO" --clobber
+          actual="$(sha256sum Twitch-1.33.vpk | cut -d ' ' -f 1)"
+          remote="$(gh api "repos/$GH_REPO/releases/tags/$TAG" --jq '.assets[] | select(.name=="Twitch-1.33.vpk") | .digest')"
+          test "$remote" = "sha256:$actual"
+          gh api --method PATCH "repos/$GH_REPO/git/refs/tags/$TAG" -f sha="$GITHUB_SHA" -F force=true >/dev/null
+          printf '\nSHA-256 (logo-only revision): `%s`\n' "$actual" >> RELEASE-1.33.md
+          gh release edit "$TAG" --repo "$GH_REPO" --title "Twitch 1.33" --notes-file RELEASE-1.33.md --latest

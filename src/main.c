@@ -499,10 +499,8 @@ static void draw_header(void)
         unsigned mask=glitch[gy];
         if(!(mask&(1u<<gx))){gx++;continue;}
         int end=gx+1;while(end<24&&(mask&(1u<<end)))end++;
-        vita2d_draw_rectangle(28+gx*1.45f,22+gy*1.45f,(end-gx)*1.45f,1.45f,C_WHITE);gx=end;
+        vita2d_draw_rectangle(SIDE_X+(SIDE_W-60)/2+gx*2.5f,21+gy*2.5f,(end-gx)*2.5f,2.5f,C_WHITE);gx=end;
     }
-    ui_text_fit(70,52,SIDE_X+SIDE_W-70,C_WHITE,1.65f,"Twitch");
-    ui_text_fit(SIDE_X,78,SIDE_W,C_GREY,0.62f,"TwitchonVita");
     int active=side_active();
     for(int i=0;i<SIDE_COUNT;i++){
         int y=SIDE_Y+i*SIDE_STEP;
