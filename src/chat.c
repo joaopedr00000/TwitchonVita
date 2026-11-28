@@ -523,7 +523,8 @@ static struct {
     char status[96];
     char login[32]; /* channel */
     char nick[32],oauth[64],outgoing[CHAT_TEXT_MAX],pending[CHAT_TEXT_MAX];
-    int writable,queued,awaiting,read_only_fallback;
+    int writable,queued,awaiting,read_only_fallback,retry_auth;
+    char fallback_code[24];
     unsigned long long last_send,sent_at;
     volatile int running;
     volatile int stop;         /* curl abort flag */
@@ -540,7 +541,8 @@ static void set_status(const char *fmt, ...)
     vsnprintf(buf, sizeof(buf), fmt, ap);
     va_end(ap);
     pthread_mutex_lock(&C.lock);
-    snprintf(C.status,sizeof(C.status),"%s",C.read_only_fallback?vt_msg("Secure chat TLS unavailable; anonymous read-only"):buf);
+    if(C.read_only_fallback)snprintf(C.status,sizeof(C.status),"%s [%s]",vt_msg("Secure chat TLS unavailable; anonymous read-only"),C.fallback_code);
+    else snprintf(C.status,sizeof(C.status),"%s",buf);
     pthread_mutex_unlock(&C.lock);
 }
 
@@ -656,6 +658,44 @@ static void chat_drop_pending(void)
     pthread_mutex_lock(&C.lock);int lost=C.queued||C.awaiting;C.writable=0;C.queued=C.awaiting=0;C.outgoing[0]=C.pending[0]=0;pthread_mutex_unlock(&C.lock);
     if(lost)push_system(vt_msg("Failed to send chat message"));
 }
+/* Read the bundled CA with Vita file I/O before giving it to libcurl.
+ * On older libcurl versions, keep the verified file-based configuration. */
+static void chat_ca(CURL *c)
+{
+    const char *paths[]={"app0:ca/cacert.pem","app0:/ca/cacert.pem"};
+    const char *path=paths[0];
+    FILE *f=fopen(path,"rb");
+    if(!f){path=paths[1];f=fopen(path,"rb");}
+    curl_easy_setopt(c,CURLOPT_CAINFO,path);
+    if(!f){LOGW("chat: CA bundle file could not be opened");return;}
+#if LIBCURL_VERSION_NUM >= 0x074d00
+    if(fseek(f,0,SEEK_END)==0){
+        long len=ftell(f);
+        if(len>0&&len<=1024*1024&&fseek(f,0,SEEK_SET)==0){
+            char *data=malloc((size_t)len);
+            if(data){
+                if(fread(data,1,(size_t)len,f)==(size_t)len){
+                    struct curl_blob blob={data,(size_t)len,CURL_BLOB_COPY};
+                    CURLcode rc=curl_easy_setopt(c,CURLOPT_CAINFO_BLOB,&blob);
+                    LOGI("chat: CA bundle %ld bytes, memory trust setup curl=%d",len,(int)rc);
+                }
+                free(data);
+            }
+        }
+    }
+#else
+    LOGI("chat: CA file opened, libcurl file mode");
+#endif
+    fclose(f);
+}
+static int chat_take_retry(void)
+{
+    pthread_mutex_lock(&C.lock);
+    int retry=C.retry_auth;C.retry_auth=0;
+    if(retry){C.read_only_fallback=0;C.fallback_code[0]=0;}
+    pthread_mutex_unlock(&C.lock);
+    return retry;
+}
 static void *chat_thread(void *argp)
 {
     static char rbuf[16384];
@@ -670,8 +710,9 @@ static void *chat_thread(void *argp)
     while (C.running) {
         set_status(vt_msg("Conectando al chat..."));
         CURL *c = curl_easy_init();
-        int ok = 0;
+        int ok = 0;char failure[24]="CONNECT";
         if (c) {
+            char tls_error[CURL_ERROR_SIZE]={0};
             curl_easy_setopt(c, CURLOPT_URL, "https://irc.chat.twitch.tv:6697");
             curl_easy_setopt(c, CURLOPT_CONNECT_ONLY, 1L);
             curl_easy_setopt(c, CURLOPT_CONNECTTIMEOUT, 10L);
@@ -680,11 +721,17 @@ static void *chat_thread(void *argp)
             /* Never send credentials without verifying the server. Legacy anonymous read-only mode remains unchanged. */
             curl_easy_setopt(c,CURLOPT_SSL_VERIFYPEER,authenticated?1L:0L);
             curl_easy_setopt(c,CURLOPT_SSL_VERIFYHOST,authenticated?2L:0L);
-            if(authenticated)curl_easy_setopt(c,CURLOPT_CAINFO,"app0:ca/cacert.pem");
+            if(authenticated){
+                chat_ca(c);
+                curl_easy_setopt(c,CURLOPT_HTTP_VERSION,CURL_HTTP_VERSION_1_1);
+                curl_easy_setopt(c,CURLOPT_ERRORBUFFER,tls_error);
+            }
             curl_easy_setopt(c, CURLOPT_XFERINFOFUNCTION, abort_cb);
             curl_easy_setopt(c, CURLOPT_NOPROGRESS, 0L);
             CURLcode r = curl_easy_perform(c);
             if (r == CURLE_OK) {
+                if(authenticated)LOGI("chat: verified TLS connected; starting IRC registration");
+                snprintf(failure,sizeof(failure),"IRC SEND");
                 char hello[256];
                 if(authenticated)
                     snprintf(hello,sizeof(hello),"CAP REQ :twitch.tv/tags twitch.tv/commands\r\nPASS oauth:%s\r\nNICK %s\r\n",C.oauth,C.nick);
@@ -693,17 +740,20 @@ static void *chat_thread(void *argp)
                 ok=irc_send(c,hello)==0;
                 memset(hello,0,sizeof(hello));
             } else if (!C.stop) {
-                LOGE("chat: no se pudo conectar (curl %d: %s)", (int)r, curl_easy_strerror(r));
+                long verify=0;curl_easy_getinfo(c,CURLINFO_SSL_VERIFYRESULT,&verify);
+                snprintf(failure,sizeof(failure),"TLS %d",(int)r);
+                LOGE("chat: connect curl=%d verify=%ld (%s) %s",(int)r,verify,curl_easy_strerror(r),tls_error);
             }
         }
 
-        int welcomed=0,auth_rejected=0,userstate_seen=0;
+        int welcomed=0,auth_rejected=0,userstate_seen=0,retry_requested=0;
         unsigned long long connected_at=sceKernelGetProcessTimeWide();
         size_t have = 0;
         unsigned long long last_rx = sceKernelGetProcessTimeWide();
         while (ok && C.running) {
             unsigned long long now=sceKernelGetProcessTimeWide();
-            if(authenticated&&!userstate_seen&&now-connected_at>15000000ULL){auth_rejected=1;break;}
+            if(!authenticated&&chat_take_retry()){retry_requested=1;break;}
+            if(authenticated&&!userstate_seen&&now-connected_at>25000000ULL){snprintf(failure,sizeof(failure),"%s",welcomed?"JOIN TIMEOUT":"AUTH TIMEOUT");auth_rejected=1;break;}
             char outgoing[CHAT_TEXT_MAX]="";int timedout=0;
             pthread_mutex_lock(&C.lock);
             if(C.awaiting&&now-C.sent_at>10000000ULL){C.awaiting=0;C.pending[0]=0;timedout=1;}
@@ -718,7 +768,7 @@ static void *chat_thread(void *argp)
                 char wire[512];snprintf(wire,sizeof(wire),"PRIVMSG #%s :%s\r\n",C.login,outgoing);
                 if(irc_send(c,wire)<0){ok=0;break;}
             }
-            if (room_id[0] && !emotes_done) {
+            if (room_id[0] && !emotes_done && (!authenticated||userstate_seen)) {
                 emotes_done = 1;
                 load_badges(room_id);
                 load_7tv(room_id);
@@ -752,7 +802,7 @@ static void *chat_thread(void *argp)
                         snprintf(pong, sizeof(pong), "PONG :%.504s\r\n", line.trailing);
                         irc_send(c, pong);
                     } else if(authenticated&&!strcmp(line.command,"001")){
-                        welcomed=1;char join[64];snprintf(join,sizeof(join),"JOIN #%s\r\n",C.login);if(irc_send(c,join)<0)ok=0;
+                        welcomed=1;LOGI("chat: IRC login accepted (001)");char join[64];snprintf(join,sizeof(join),"JOIN #%s\r\n",C.login);if(irc_send(c,join)<0)ok=0;
                     } else if (!strcmp(line.command, "ROOMSTATE")) {
                         if(authenticated&&welcomed)set_status(vt_msg("Conectado"));
                         if (!room_id[0])
@@ -767,6 +817,7 @@ static void *chat_thread(void *argp)
                     } else if (!strcmp(line.command, "CLEARCHAT") && !line.has_trailing) {
                         push_system(vt_msg("El chat ha sido borrado por un moderador"));
                     } else if(authenticated&&welcomed&&!strcmp(line.command,"USERSTATE")){
+                        if(!userstate_seen)LOGI("chat: IRC USERSTATE received; authenticated room ready");
                         userstate_seen=1;
                         char own[CHAT_TEXT_MAX]="";
                         pthread_mutex_lock(&C.lock);
@@ -774,7 +825,7 @@ static void *chat_thread(void *argp)
                         pthread_mutex_unlock(&C.lock);
                         if(own[0]){irc_line_t echo={0};snprintf(echo.command,sizeof(echo.command),"PRIVMSG");snprintf(echo.prefix,sizeof(echo.prefix),"%s!%s",C.nick,C.nick);snprintf(echo.trailing,sizeof(echo.trailing),"%s",own);echo.has_trailing=1;if(chat_build_msg(&echo,&msg)==0)push_msg(&msg);}
                     } else if (!strcmp(line.command, "NOTICE")) {
-                        if(authenticated&&!welcomed){auth_rejected=1;ok=0;}
+                        if(authenticated&&!welcomed){auth_rejected=1;ok=0;snprintf(failure,sizeof(failure),"AUTH REJECT");LOGW("chat: IRC authentication rejected by server");}
                         else {pthread_mutex_lock(&C.lock);int rejected=C.awaiting;C.awaiting=0;C.pending[0]=0;pthread_mutex_unlock(&C.lock);if(rejected)push_system(vt_msg("Failed to send chat message"));if(line.trailing[0])push_system(line.trailing);}
                         LOGW("chat: server NOTICE received");
                     } else if (chat_build_msg(&line, &msg) == 0) {
@@ -791,7 +842,11 @@ static void *chat_thread(void *argp)
         if (c)
             curl_easy_cleanup(c);
         chat_drop_pending();
-        if(authenticated&&(!userstate_seen||auth_rejected)&&C.running){authenticated=0;pthread_mutex_lock(&C.lock);C.read_only_fallback=1;pthread_mutex_unlock(&C.lock);LOGW("chat: secure authentication unavailable; read-only fallback");set_status(vt_msg("Secure chat TLS unavailable; anonymous read-only"));continue;}
+        if(retry_requested&&C.running){authenticated=C.nick[0]&&C.oauth[0];continue;}
+        if(authenticated&&(!userstate_seen||auth_rejected)&&C.running){
+            authenticated=0;pthread_mutex_lock(&C.lock);C.read_only_fallback=1;snprintf(C.fallback_code,sizeof(C.fallback_code),"%s",failure);pthread_mutex_unlock(&C.lock);
+            LOGW("chat: read-only fallback (%s)",failure);set_status(vt_msg("Secure chat TLS unavailable; anonymous read-only"));continue;
+        }
         if (!C.running)
             break;
         set_status(vt_msg("Chat desconectado, reintentando en %d s..."), backoff);
@@ -820,7 +875,7 @@ void chat_start(const char *login,const char *nick,const char *oauth)
         return;
     chat_emotes_reset();
     C.head = C.count = 0;
-    C.writable=C.queued=C.awaiting=C.read_only_fallback=0;C.last_send=C.sent_at=0;C.outgoing[0]=C.pending[0]=0;
+    C.writable=C.queued=C.awaiting=C.read_only_fallback=C.retry_auth=0;C.fallback_code[0]=0;C.last_send=C.sent_at=0;C.outgoing[0]=C.pending[0]=0;
     C.nick[0]=C.oauth[0]=0;
     if(nick&&oauth&&*nick&&*oauth&&strlen(nick)<sizeof(C.nick)&&strlen(oauth)<sizeof(C.oauth)&&strspn(nick,"abcdefghijklmnopqrstuvwxyz0123456789_")==strlen(nick)&&strspn(oauth,"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")==strlen(oauth)){
         snprintf(C.nick,sizeof(C.nick),"%s",nick);snprintf(C.oauth,sizeof(C.oauth),"%s",oauth);
@@ -859,6 +914,7 @@ void chat_stop(void)
     memset(C.oauth,0,sizeof(C.oauth));C.nick[0]=0;
 }
 
+int chat_retry_auth(void){if(!C.lock_ok)return 0;pthread_mutex_lock(&C.lock);int ok=C.running&&C.read_only_fallback&&C.nick[0]&&C.oauth[0];if(ok)C.retry_auth=1;pthread_mutex_unlock(&C.lock);return ok;}
 int chat_can_send(void){if(!C.lock_ok)return 0;pthread_mutex_lock(&C.lock);int ok=C.writable&&C.running;pthread_mutex_unlock(&C.lock);return ok;}
 int chat_queue_message(const char *text){
     char buf[CHAT_TEXT_MAX];if(chat_prepare_outgoing(text,buf,sizeof(buf))<0)return -3;

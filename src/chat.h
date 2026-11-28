@@ -91,6 +91,7 @@ int chat_resolve_badges(const char *tag, int16_t *out, int max);
 /* Authenticated IRC uses verified TLS; anonymous mode is read-only. */
 void chat_start(const char *login,const char *nick,const char *oauth);
 int chat_can_send(void);
+int chat_retry_auth(void);
 /* 0 queued, -1 unavailable, -2 rate limited, -3 invalid text. */
 int chat_queue_message(const char *text);
 void chat_stop(void);

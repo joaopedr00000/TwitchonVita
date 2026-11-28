@@ -1143,6 +1143,7 @@ int player_run(const player_params_t *pp, char *err, int errlen)
                 if(pp->chat_on)*pp->chat_on=1;
                 if(!chat_running())chat_start(pp->login,pp->chat_nick,pp->chat_oauth);
                 chat_status(view.chat_notice,sizeof(view.chat_notice));
+                chat_retry_auth();
                 view.notice=view.chat_notice[0]?view.chat_notice:vt_msg("Conectando al chat...");view.notice_until=now_us+3000000ULL;
             }else if(open_chat_keyboard())view.ime_active=1;
             else {view.notice=vt_msg("Cannot open PS Vita keyboard");view.notice_until=now_us+3000000ULL;}
