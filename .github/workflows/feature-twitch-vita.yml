@@ -43,10 +43,12 @@ jobs:
           grep -q 'src/i18n.c' CMakeLists.txt
           grep -q 'src/ime_utf8.c' CMakeLists.txt
           grep -Fq 'PASS SCHMOOPIIE' src/chat.c
-          ! grep -Fq 'PASS oauth:' src/chat.c
+          grep -Fq 'PASS oauth:' src/chat.c
+          grep -Fq 'CURLOPT_SSL_VERIFYPEER,authenticated?1L:0L' src/chat.c
+          grep -Fq 'chat_queue_message(message)' src/player.c
           grep -Fq 'pthread_create(&C.thread' src/chat.c
           grep -Fq 'pthread_join(C.thread' src/chat.c
-          grep -Fq 'chat_start(pp->login)' src/player.c
+          grep -Fq 'chat_start(pp->login,pp->chat_nick,pp->chat_oauth)' src/player.c
           grep -Fq 'SCE_CTRL_SELECT' src/player.c
           grep -Fq 'vt_lang_set_code' src/main.c
   vita-sdk-vpk:

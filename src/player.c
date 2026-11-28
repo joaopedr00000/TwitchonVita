@@ -760,12 +760,23 @@ typedef struct {
     const char *status;   /* centred message (buffering, ads...) or NULL */
     int menu;             /* in-player extras opened by SELECT */
     int menu_sel;
+    int ime_active;
     int quality_menu,quality_sel,quality_top;
     int decoded_w,decoded_h,display_w,display_h;
     const char *notice;   /* transient send/authentication feedback */
     uint64_t notice_until;
 } view_t;
 
+static SceWChar16 chat_title16[64],chat_initial16[256],chat_buffer16[256];
+static int open_chat_keyboard(void){
+    vt_utf8_to_utf16((uint16_t*)chat_title16,64,vt_tr(VT_I_SEND_MESSAGE));
+    memset(chat_initial16,0,sizeof(chat_initial16));memset(chat_buffer16,0,sizeof(chat_buffer16));
+    SceImeDialogParam param;sceImeDialogParamInit(&param);
+    param.supportedLanguages=SCE_IME_LANGUAGE_ENGLISH|SCE_IME_LANGUAGE_SPANISH|SCE_IME_LANGUAGE_PORTUGUESE_BR|SCE_IME_LANGUAGE_FRENCH|SCE_IME_LANGUAGE_GERMAN|SCE_IME_LANGUAGE_ITALIAN|SCE_IME_LANGUAGE_RUSSIAN|SCE_IME_LANGUAGE_JAPANESE|SCE_IME_LANGUAGE_KOREAN|SCE_IME_LANGUAGE_SIMPLIFIED_CHINESE|SCE_IME_LANGUAGE_TRADITIONAL_CHINESE|SCE_IME_LANGUAGE_TURKISH;
+    param.languagesForced=SCE_FALSE;param.type=SCE_IME_TYPE_DEFAULT;param.dialogMode=SCE_IME_DIALOG_DIALOG_MODE_WITH_CANCEL;param.textBoxMode=SCE_IME_DIALOG_TEXTBOX_MODE_WITH_CLEAR;
+    param.title=chat_title16;param.maxTextLength=150;param.initialText=chat_initial16;param.inputTextBuffer=chat_buffer16;
+    return sceImeDialogInit(&param)>=0;
+}
 static void draw_view(const vslot_t *frame, view_t *vw)
 {
     int chat = vw->pp->chat_on && *vw->pp->chat_on;
@@ -794,8 +805,11 @@ static void draw_view(const vslot_t *frame, view_t *vw)
         vita2d_draw_texture_part_scale(frame->tex, (AW - dw) / 2, (SCREEN_H - dh) / 2,
                                        0, 0, vis_w, vis_h, s, s);
     }
-    if (chat)
+    if (chat){
         chat_view_draw(AW, 0);
+        vita2d_draw_rectangle(AW,SCREEN_H-38,CHAT_PANEL_W,38,C_PANEL2);
+        ui_hint_bounded(AW+10,SCREEN_H-13,CHAT_PANEL_W-20,"R",vw->pp->chat_oauth?vt_tr(VT_I_WRITE):vt_tr(VT_I_LOGIN_TO_CHAT));
+    }
 
     vita2d_pgf *f = vw->pp->font;
     if (vw->osd) {
@@ -837,8 +851,10 @@ static void draw_view(const vslot_t *frame, view_t *vw)
         int vw_width=ui_text_w(0.8f,caption)+20;if(vw_width>AW/2)vw_width=AW/2;
         ui_text_fit(AW-vw_width,SCREEN_H-12,vw_width-12,C_WHITE,0.8f,caption);
         if(vw->viewers_busy)ui_spinner(AW-vw_width-8,SCREEN_H-19,5,C_PURPLE);
-        ui_text_fit(14,SCREEN_H-12,AW-vw_width-36,COLOR_GREY,0.73f,
-            vw->pp->btn_back==SCE_CTRL_CIRCLE?vt_msg("O: salir    Triangulo: info    Cuadrado: chat"):vt_msg("X: salir    Triangulo: info    Cuadrado: chat"));
+        int cell=(AW-vw_width-30)/3;
+        ui_hint_bounded(10,SCREEN_H-12,cell,vw->pp->btn_back==SCE_CTRL_CIRCLE?"O":"X",vt_tr(VT_I_EXIT));
+        ui_hint_bounded(10+cell,SCREEN_H-12,cell,"△",vt_tr(VT_I_SHOW_INFO));
+        ui_hint_bounded(10+2*cell,SCREEN_H-12,cell,"□",vt_tr(VT_I_CHAT));
     }
     if(vw->pp->diagnostics && !vw->menu && !vw->quality_menu){
         char a[160],b[160];
@@ -873,15 +889,15 @@ static void draw_view(const vslot_t *frame, view_t *vw)
         }
         vita2d_draw_rectangle(x+16,y+h-52,w/2-24,38,C_PANEL2);
         vita2d_draw_rectangle(x+w/2+8,y+h-52,w/2-24,38,C_PANEL2);
-        ui_text_fit(x+28,y+h-27,w/2-48,C_WHITE,0.88f,vt_tr(VT_I_PLAY));
-        ui_text_fit(x+w/2+20,y+h-27,w/2-48,C_WHITE,0.88f,vt_tr(VT_I_BACK));
+        ui_hint_bounded(x+28,y+h-27,w/2-48,vw->pp->btn_back==SCE_CTRL_CIRCLE?"X":"O",vt_tr(VT_I_PLAY));
+        ui_hint_bounded(x+w/2+20,y+h-27,w/2-48,vw->pp->btn_back==SCE_CTRL_CIRCLE?"O":"X",vt_tr(VT_I_BACK));
     }else if(vw->menu){
-        static const vt_text_id labels[]={VT_I_CHAT,VT_I_SHOW_INFO,VT_I_QUALITY,VT_I_CLOSE,VT_I_EXIT};
+        static const vt_text_id labels[]={VT_I_CHAT,VT_I_SHOW_INFO,VT_I_QUALITY,VT_I_SEND_MESSAGE,VT_I_CLOSE,VT_I_EXIT};
         vita2d_draw_rectangle(0,0,SCREEN_W,SCREEN_H,RGBA8(0,0,0,190));
-        ui_round_rect(205,66,550,412,12,C_SURFACE);
-        ui_text_fit(233,107,494,C_WHITE,1.25f,vt_tr(VT_I_MENU));
-        for(int i=0;i<5;i++){
-            int y=122+i*65;
+        ui_round_rect(205,56,550,432,12,C_SURFACE);
+        ui_text_fit(233,96,494,C_WHITE,1.25f,vt_tr(VT_I_MENU));
+        for(int i=0;i<6;i++){
+            int y=108+i*58;
             if(i==vw->menu_sel)ui_round_rect(222,y,516,49,8,C_PURPLE);
             const char *label=labels[i]==VT_I_SHOW_INFO?
                  (vw->osd?vt_tr(VT_I_HIDE_INFO):vt_tr(VT_I_SHOW_INFO)):vt_tr(labels[i]);
@@ -998,7 +1014,7 @@ int player_run(const player_params_t *pp, char *err, int errlen)
 
     LOGI("startup: audio thread setup done; start chat if enabled");
     if (pp->chat_on && *pp->chat_on && pp->login)
-        chat_start(pp->login);
+        chat_start(pp->login,pp->chat_nick,pp->chat_oauth);
     img_set_deferred_free(1);
     LOGI("startup: enter player input/render loop");
 
@@ -1027,8 +1043,15 @@ int player_run(const player_params_t *pp, char *err, int errlen)
 
         ui_input_poll(&input);
         unsigned pressed=input.pressed;
-        int refresh_viewers=0;
-        {
+        int refresh_viewers=0,write_chat=0;
+        if(view.ime_active){
+            if(sceImeDialogGetStatus()==SCE_COMMON_DIALOG_STATUS_FINISHED){
+                SceImeDialogResult result={0};sceImeDialogGetResult(&result);sceImeDialogTerm();view.ime_active=0;
+                if(result.button==SCE_IME_DIALOG_BUTTON_ENTER){char message[CHAT_TEXT_MAX];vt_utf16_to_utf8(message,sizeof(message),(const uint16_t*)chat_buffer16,256);int rc=chat_queue_message(message);
+                    view.notice=vt_msg(rc==0?"Message queued (server confirmation pending)":rc==-2?"Please slow down (chat rate limit)":rc==-3?"Message empty or too long":"Failed to send chat message");view.notice_until=now_us+3000000ULL;}
+            }
+            pressed=0;input.touch_tap=0;last_draw=0;
+        }else {
             int accept=pp->btn_back==SCE_CTRL_CIRCLE?SCE_CTRL_CROSS:SCE_CTRL_CIRCLE;
             if(view.quality_menu){
                 int n=pp->variant_count,vis=n<6?n:6;
@@ -1057,12 +1080,12 @@ int player_run(const player_params_t *pp, char *err, int errlen)
             }else{
             if(pressed&SCE_CTRL_SELECT){view.menu=!view.menu;view.menu_sel=0;last_draw=0;}
             if(view.menu){
-                if(pressed&SCE_CTRL_UP)view.menu_sel=(view.menu_sel+4)%5;
-                if(pressed&SCE_CTRL_DOWN)view.menu_sel=(view.menu_sel+1)%5;
+                if(pressed&SCE_CTRL_UP)view.menu_sel=(view.menu_sel+5)%6;
+                if(pressed&SCE_CTRL_DOWN)view.menu_sel=(view.menu_sel+1)%6;
                 if(input.touch_tap){
                     int hit=0;
-                    for(int i=0;i<5;i++)
-                        if(ui_touch_hit(&input,222,122+i*65,516,49)){
+                    for(int i=0;i<6;i++)
+                        if(ui_touch_hit(&input,222,108+i*58,516,49)){
                             view.menu_sel=i;pressed|=accept;hit=1;break;
                         }
                     if(!hit)view.menu=0;
@@ -1074,7 +1097,7 @@ int player_run(const player_params_t *pp, char *err, int errlen)
                             if(pp->chat_on&&pp->login){
                                 *pp->chat_on=!*pp->chat_on;
                                 if(*pp->chat_on&&!chat_running())
-                                    chat_start(pp->login);
+                                    chat_start(pp->login,pp->chat_nick,pp->chat_oauth);
                             }
                             break;
                         case 1:view.osd=!view.osd;osd_until=view.osd?now_us+5000000ULL:0;refresh_viewers=view.osd;last_draw=0;view.menu=0;break;
@@ -1086,17 +1109,19 @@ int player_run(const player_params_t *pp, char *err, int errlen)
                                 view.quality_top=view.quality_sel>=6?view.quality_sel-5:0;
                             }
                             last_draw=0;break;
-                        case 3:view.menu=0;break;
-                        case 4:should_exit=1;break;
+                        case 3:write_chat=1;view.menu=0;break;
+                        case 4:view.menu=0;break;
+                        case 5:should_exit=1;break;
                     }
                 }
             }else{
                 if(pressed&pp->btn_back)should_exit=1;
+                if(pressed&SCE_CTRL_RTRIGGER)write_chat=1;
                 if(pressed&SCE_CTRL_TRIANGLE){view.osd=!view.osd;osd_until=view.osd?now_us+5000000ULL:0;refresh_viewers=view.osd;last_draw=0;}
                 if((pressed&SCE_CTRL_SQUARE)&&pp->chat_on&&pp->login){
                     *pp->chat_on=!*pp->chat_on;
                     if(*pp->chat_on&&!chat_running())
-                        chat_start(pp->login);
+                        chat_start(pp->login,pp->chat_nick,pp->chat_oauth);
                     LOGI("chat %s",*pp->chat_on?"visible":"oculto");
                 }
                 if(pressed&(SCE_CTRL_LEFT|SCE_CTRL_RIGHT)){
@@ -1109,7 +1134,8 @@ int player_run(const player_params_t *pp, char *err, int errlen)
                 }
                 if(input.touch_tap){
                     int aw=(pp->chat_on&&*pp->chat_on)?SCREEN_W-CHAT_PANEL_W:SCREEN_W;
-                    if(view.osd&&input.touch_y<64&&input.touch_x>=aw/2&&input.touch_x<aw&&pp->variants&&pp->variant_count>0&&pp->variant_requested){
+                    if(aw<SCREEN_W&&input.touch_x>=aw&&input.touch_y>=SCREEN_H-38)write_chat=1;
+                    else if(view.osd&&input.touch_y<64&&input.touch_x>=aw/2&&input.touch_x<aw&&pp->variants&&pp->variant_count>0&&pp->variant_requested){
                         view.quality_menu=1;view.quality_sel=pp->variant_current;
                         if(view.quality_sel<0||view.quality_sel>=pp->variant_count)view.quality_sel=0;
                         view.quality_top=view.quality_sel>=6?view.quality_sel-5:0;
@@ -1120,6 +1146,16 @@ int player_run(const player_params_t *pp, char *err, int errlen)
             }
         }
         if(should_exit)break;
+        if(write_chat&&!view.ime_active){
+            if(!pp->chat_oauth||!pp->chat_nick){view.notice=vt_tr(VT_I_LOGIN_TO_CHAT);view.notice_until=now_us+3000000ULL;}
+            else if(!chat_can_send()){
+                if(pp->chat_on)*pp->chat_on=1;
+                if(!chat_running())chat_start(pp->login,pp->chat_nick,pp->chat_oauth);
+                view.notice=vt_msg("Conectando al chat...");view.notice_until=now_us+3000000ULL;
+            }else if(open_chat_keyboard())view.ime_active=1;
+            else {view.notice=vt_msg("Cannot open PS Vita keyboard");view.notice_until=now_us+3000000ULL;}
+            last_draw=0;
+        }
         if(view.viewers_busy&&task_done(&viewer_task)){
             view.viewers_busy=0;
             if(viewer_task.result==0&&pp->viewer_count)*pp->viewer_count=viewer_job.count;
@@ -1311,6 +1347,7 @@ int player_run(const player_params_t *pp, char *err, int errlen)
          view.dropped, vp->total_errors, pl->rebuffers, ret < 0 ? ", motivo: " : " (salida del usuario)",
          ret < 0 ? err : "");
 
+    if(view.ime_active){sceImeDialogAbort();sceImeDialogTerm();}
     if(view.viewers_busy){task_cancel(&viewer_task);while(!task_done(&viewer_task))sceKernelDelayThread(10000);}
     /* teardown: unblock producers first, then stop threads */
     pq_abort(&pl->vq);

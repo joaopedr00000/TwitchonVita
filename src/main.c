@@ -45,7 +45,7 @@ int _newlib_heap_size_user = 96 * 1024 * 1024;
 #define SETTINGS_FILE DATA_DIR "/settings.txt"
 #define LOG_FILE      DATA_DIR "/log.txt"
 #define LOG_PREV_FILE DATA_DIR "/log_prev.txt"
-#define APP_VERSION   "1.33-classic-video1"
+#define APP_VERSION   "1.33-classic-chat1"
 
 #define MAX_ITEMS 100
 
@@ -528,11 +528,7 @@ static void draw_header(void)
 /* Fixed footer cells keep long localized labels inside the 960px display. */
 static void footer_hint(int x,int width,int y,const char *btn,const char *label)
 {
-    int bw=ui_text_w(0.70f,btn)+10;if(bw<22)bw=22;
-    if(bw>width-12)bw=width-12;
-    ui_round_rect(x,y-16,bw,22,4,C_PANEL2);
-    ui_text_fit(x+5,y,bw-10,C_WHITE,0.70f,btn);
-    ui_text_fit(x+bw+5,y,width-bw-10,C_GREY,0.76f,label);
+    ui_hint_bounded(x,y,width,btn,label);
 }
 static void draw_footer(void)
 {
@@ -674,7 +670,7 @@ static void modal_message(const char *title, const char *msg)
         draw_modal_box(560, 210, &x, &y);
         ui_text_fit(x + 28, y + 48, 504, C_WHITE, 1.2f, title);
         wrap_text(x + 28, y + 90, 504, C_GREY, 0.95f, msg, 3);
-        ui_hint(x + 560 - 140, y + 210 - 22, g_ok_name, hint);
+        ui_hint_bounded(x+560-160,y+210-22,136,g_ok_name,hint);
         frame_end();
     }
 }
@@ -704,7 +700,7 @@ static int run_with_spinner(task_t *t, task_fn fn, void *arg, const char *msg)
         draw_modal_box(460, 150, &x, &y);
         ui_spinner(x + 50, y + 62, 14, C_PURPLE);
         ui_text_fit(x + 84, y + 70, 460 - 110, C_WHITE, 1.0f, msg);
-        ui_hint(x + 460 - 130, y + 150 - 20, g_back_name, vt_msg("Cancelar"));
+        ui_hint_bounded(x+460-180,y+150-20,156,g_back_name,vt_msg("Cancelar"));
         frame_end();
     }
 }
@@ -949,8 +945,8 @@ static void quality_draw(void)
     }
     vita2d_draw_rectangle(x+16,y+h-53,w/2-24,43,C_PANEL2);
     vita2d_draw_rectangle(x+w/2+8,y+h-53,w/2-24,43,C_PANEL2);
-    ui_text(x+30,y+h-25,C_WHITE,0.9f,vt_tr(VT_I_PLAY));
-    ui_text(x+w/2+20,y+h-25,C_WHITE,0.9f,vt_tr(VT_I_BACK));
+    ui_hint_bounded(x+28,y+h-25,w/2-48,g_ok_name,vt_tr(VT_I_PLAY));
+    ui_hint_bounded(x+w/2+20,y+h-25,w/2-48,g_back_name,vt_tr(VT_I_BACK));
 }
 
 static void play_tick(void)
@@ -1246,7 +1242,8 @@ static void language_screen(void)
             if(i==sel) ui_round_rect(x+12,y+60+k*row,w-24,row-3,6,C_PURPLE);
             ui_text_fit(x+30,y+90+k*row,w-60,C_WHITE,0.94f,vt_lang_name(i));
         }
-        ui_text_fit(x+24,y+h-13,w-48,C_GREY,0.7f,vt_msg("Up/Down  |  X  |  Back"));
+        ui_hint_bounded(x+24,y+h-14,(w-48)/2,g_ok_name,vt_tr(VT_I_PLAY));
+        ui_hint_bounded(x+w/2,y+h-14,w/2-24,g_back_name,vt_tr(VT_I_BACK));
         frame_end();
     }
 }

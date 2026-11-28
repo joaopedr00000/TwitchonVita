@@ -88,8 +88,11 @@ int chat_load_badges(const char *json);
 int chat_resolve_badges(const char *tag, int16_t *out, int max);
 
 /* ---- live chat (Vita only) ---- */
-/* Legacy anonymous IRC reader. No account credentials are accepted. */
-void chat_start(const char *login);
+/* Authenticated IRC uses verified TLS; anonymous mode is read-only. */
+void chat_start(const char *login,const char *nick,const char *oauth);
+int chat_can_send(void);
+/* 0 queued, -1 unavailable, -2 rate limited, -3 invalid text. */
+int chat_queue_message(const char *text);
 void chat_stop(void);
 /* Pure safety parser used by Vita and host regression tests. */
 int chat_prepare_outgoing(const char *in,char *out,size_t cap);
