@@ -45,7 +45,7 @@ int _newlib_heap_size_user = 96 * 1024 * 1024;
 #define SETTINGS_FILE DATA_DIR "/settings.txt"
 #define LOG_FILE      DATA_DIR "/log.txt"
 #define LOG_PREV_FILE DATA_DIR "/log_prev.txt"
-#define APP_VERSION   "1.34-media-playback-test22"
+#define APP_VERSION   "1.34-media-playback-test24"
 
 #define MAX_ITEMS 100
 
@@ -1181,6 +1181,7 @@ static void play_channel(const char *login,const char *display,const char *title
     LOGI("quality flow: fetching %s",play_login);
 }
 
+static const char *profile_sub_badge(void);
 static void recordings_screen(const twitch_stream_t *channel);
 static void recordings_screen_kind(const twitch_stream_t *channel,int initial);
 static void own_profile(void);
@@ -2052,7 +2053,8 @@ static void recordings_screen_kind(const twitch_stream_t *channel,int initial){
                 vita2d_texture *tex=v->thumb[0]?img_get(v->thumb):NULL;if(tex)ui_image(tex,46,y+4,116,66);
                 ui_text_fit(174,y+27,720,C_WHITE,1.0f,v->title);
                 char line[160];int ix=media_find(v->id);snprintf(line,sizeof(line),"%.10s | %02d:%02d:%02d | %s%s",v->date,v->seconds/3600,v->seconds/60%60,v->seconds%60,v->type,ix>=0&&media_saved[ix].saved?" | Saved":"");
-                ui_text_fit(174,y+55,720,C_GREY,.84f,line);
+                ui_text_fit(174,y+55,v->subscriber_only?430:720,C_GREY,.84f,line);
+                if(v->subscriber_only){ui_round_rect(620,y+34,284,28,4,C_SCRIM);ui_text_fit(630,y+54,264,C_WHITE,.84f,profile_sub_badge());}
             }
             ui_text_fit(28,525,900,C_WHITE,.88f,vt_lang_current()==2?"L/R Filtro | X Assistir | Quadrado Salvar | O Voltar":"L/R Filter | Confirm Play | Square Save | Back");
             frame_end();
@@ -2153,7 +2155,8 @@ static void profile_media_card(const twitch_media_t *v,int x,int y,int focused){
         ui_round_rect(x+104,y+35,14,12,4,C_WHITE);
         vita2d_draw_rectangle(x+107,y+38,8,8,C_BG);
         ui_round_rect(x+101,y+43,20,14,3,C_WHITE);
-        ui_text_fit(x+8,y+80,w-16,C_WHITE,.82f,profile_sub_badge());
+        ui_round_rect(x+6,y+61,w-12,28,4,C_BG);
+        ui_text_fit(x+10,y+80,w-20,C_WHITE,.87f,profile_sub_badge());
     }
     char duration[32];snprintf(duration,sizeof(duration),"%02d:%02d:%02d",v->seconds/3600,v->seconds/60%60,v->seconds%60);
     ui_round_rect(x+151,y+93,66,21,3,C_SCRIM);ui_text_fit(x+155,y+108,59,C_WHITE,.7f,duration);

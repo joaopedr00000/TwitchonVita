@@ -4,6 +4,15 @@
 #include <string.h>
 int main(void){
     if(!twitch_video_subscriber_type("SUB_ONLY_LIVE")||twitch_video_subscriber_type("UNKNOWN")||twitch_video_subscriber_type("ALL_ACCESS_PASS")||twitch_video_subscriber_type(NULL))return 1;
+    twitch_media_t media[3]={0};
+    strcpy(media[0].id,"100");strcpy(media[1].id,"200");strcpy(media[2].id,"300");
+    int seen=0;
+    assert(twitch_parse_media_restrictions("{\"data\":{\"v0\":{\"id\":\"100\",\"resourceRestriction\":{\"type\":\"SUB_ONLY_LIVE\"}},\"v1\":{\"id\":\"200\",\"resourceRestriction\":null},\"v2\":{\"id\":\"300\",\"resourceRestriction\":{\"type\":\"ALL_ACCESS_PASS\"}}}}",media,3,&seen)==1);
+    assert(seen==3&&media[0].subscriber_only&&!media[1].subscriber_only&&!media[2].subscriber_only);
+    assert(twitch_parse_media_restrictions("{\"data\":{\"v1\":{\"id\":\"200\",\"restriction\":{\"type\":\"subscriber_only\",\"reason\":\"\"}},\"v2\":{\"id\":\"wrong\",\"restriction\":{\"type\":\"SUB_ONLY\"}}},\"errors\":[{}]}",media,3,&seen)==1);
+    assert(seen==1&&media[0].subscriber_only&&media[1].subscriber_only&&!media[2].subscriber_only);
+    assert(twitch_parse_media_restrictions("{\"errors\":[{\"message\":\"Forbidden\"}]}",media,3,&seen)<0);
+    assert(!media[2].subscriber_only&&seen==0);
     char url[96],bio[32];
     assert(twitch_channel_url("gaules",url,sizeof(url))==0);
     assert(!strcmp(url,"https://www.twitch.tv/gaules"));

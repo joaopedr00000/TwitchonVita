@@ -134,7 +134,37 @@ const char *twitch_vod_access_message(const char *reason){
     return reason&&!strcmp(reason,"SUBSCRIPTION")?subscriber[lang]:denied[lang];
 }
 int twitch_video_subscriber_type(const char *type){
-    return type&&(!strcmp(type,"SUB_ONLY_LIVE")||!strcmp(type,"SUB_ONLY_VOD")||!strcmp(type,"SUBSCRIBER_ONLY"));
+    if(!type)return 0;
+    char key[80];size_t len=strlen(type);
+    if(len>=sizeof(key))return 0;
+    for(size_t i=0;i<=len;i++)key[i]=(char)toupper((unsigned char)type[i]);
+    return !strcmp(key,"SUB_ONLY_LIVE")||!strcmp(key,"SUB_ONLY_VOD")||
+        !strcmp(key,"SUBSCRIBER_ONLY")||!strcmp(key,"SUB_ONLY")||
+        !strcmp(key,"SUBS_ONLY")||!strcmp(key,"SUBSCRIBERS_ONLY")||
+        !strcmp(key,"SUBSCRIBERS ONLY")||!strcmp(key,"SUBSCRIBER ONLY");
+}
+/* Read only explicit restriction metadata; missing fields and unrelated
+ * GraphQL errors are not evidence of a subscription. Keep positive results
+ * across independent current/legacy queries, verifying each returned video ID. */
+int twitch_parse_media_restrictions(const char *body,twitch_media_t *out,int n,int *seen){
+    if(seen)*seen=0;
+    if(!body||!out||n<0||n>VT_MEDIA_MAX)return -1;
+    json_t *root=json_parse(body);
+    json_t *data=json_get(root,"data");
+    if(!data||data->type!=JSON_OBJECT){json_free(root);return -1;}
+    int marked=0;
+    for(int i=0;i<n;i++){
+        char alias[24];snprintf(alias,sizeof(alias),"v%d",i);
+        json_t *v=json_get(data,alias);
+        if(!v||v->type!=JSON_OBJECT||strcmp(json_str(v,"id",""),out[i].id))continue;
+        json_t *current=json_get(v,"resourceRestriction"),*legacy=json_get(v,"restriction");
+        if(seen&&(current||legacy))(*seen)++;
+        if(twitch_video_subscriber_type(json_str(current,"type",NULL))||
+           twitch_video_subscriber_type(json_str(legacy,"type",NULL))||
+           twitch_video_subscriber_type(json_str(legacy,"reason",NULL)))out[i].subscriber_only=1;
+        if(out[i].subscriber_only)marked++;
+    }
+    json_free(root);return marked;
 }
 int twitch_parse_clip_source(const char *json,char *vod,size_t cap,int *offset){
     if(!json||!vod||!cap||!offset)return -1;
@@ -1113,28 +1143,47 @@ static int media_public_gql(const char *login,int kind,twitch_media_t *out,int m
     LOGI("media: public catalog kind=%d http=%ld curl=%d count=%d",kind,*status,*net,n);
     return n;
 }
-/* Best-effort public metadata; never infer a subscription from HTTP 403.
- * Query only catalog IDs, never playback tokens. Failure leaves the catalog usable. */
+/* Public, read-only restriction lookups. Try the modern and legacy fields
+ * independently so a removed field cannot invalidate the entire query.
+ * Use the same verified HTTPS transport as the public catalog, with native
+ * fallback on CA failure. Never infer subscription from an HTTP status. */
 static void media_restrictions(twitch_media_t *out,int n,volatile int *abort_flag){
-    char body[4096]="{\"query\":\"query { ";size_t used=strlen(body);
-    for(int i=0;i<n;i++){
-        if(!numeric_id(out[i].id))continue;
-        int k=snprintf(body+used,sizeof(body)-used,"v%d: video(id: \\\"%s\\\") { resourceRestriction { type } } ",i,out[i].id);
-        if(k<0||(size_t)k>=sizeof(body)-used-8)return;
-        used+=(size_t)k;
+    if(n<1||n>VT_MEDIA_MAX)return;
+    CURL *c=http_new();
+    CURLcode trust=c?vt_tls_configure(c):CURLE_FAILED_INIT;
+    struct curl_slist *h=NULL;
+    if(c){
+        curl_easy_setopt(c,CURLOPT_FOLLOWLOCATION,0L);
+        h=curl_slist_append(NULL,"Client-ID: " TWITCH_CLIENT_ID);
+        struct curl_slist *next=h?curl_slist_append(h,"Content-Type: text/plain;charset=UTF-8"):NULL;
+        if(next)h=next;else trust=CURLE_OUT_OF_MEMORY;
     }
-    snprintf(body+used,sizeof(body)-used,"}\"}");
-    if(abort_flag&&*abort_flag)return;
-    buf_t b={0};long status=0;
-    if(!http_native_read("https://gql.twitch.tv/gql",body,NULL,1,&b,&status,abort_flag)&&status==200&&b.data){
-        json_t *root=json_parse((const char*)b.data);
+    const char *fields[]={"resourceRestriction { type }","restriction { type reason }"};
+    int marked=0;
+    for(int pass=0;pass<2&&marked<n&&!(abort_flag&&*abort_flag);pass++){
+        char body[4096]="{\"query\":\"query { ";size_t used=strlen(body);int count=0;
         for(int i=0;i<n;i++){
-            char path[80];snprintf(path,sizeof(path),"data.v%d.resourceRestriction.type",i);
-            out[i].subscriber_only=twitch_video_subscriber_type(json_str(root,path,""));
+            if(out[i].subscriber_only||!numeric_id(out[i].id))continue;
+            int k=snprintf(body+used,sizeof(body)-used,"v%d: video(id: \\\"%s\\\") { id %s } ",i,out[i].id,fields[pass]);
+            if(k<0||(size_t)k>=sizeof(body)-used-8)break;
+            used+=(size_t)k;count++;
         }
-        json_free(root);
+        if(!count)break;
+        snprintf(body+used,sizeof(body)-used,"}\"}");
+        buf_t buf={0};long status=0;
+        int net=trust==CURLE_OK?http_request(c,"https://gql.twitch.tv/gql",body,h,&buf,&status,abort_flag):-(int)trust;
+        if((trust!=CURLE_OK||net==-(int)CURLE_SSL_CACERT_BADFILE)&&!status&&!(abort_flag&&*abort_flag))
+            net=http_native_read("https://gql.twitch.tv/gql",body,NULL,1,&buf,&status,abort_flag);
+        int seen=0,parsed=-1,errors=0;
+        if(!net&&status==200&&buf.data){
+            parsed=twitch_parse_media_restrictions((const char*)buf.data,out,n,&seen);
+            json_t *r=json_parse((const char*)buf.data);errors=json_get(r,"errors")!=NULL;json_free(r);
+            if(parsed>=0){marked=0;for(int i=0;i<n;i++)marked+=!!out[i].subscriber_only;}
+        }
+        LOGI("media restrictions: pass=%d http=%ld net=%d requested=%d seen=%d marked=%d gql_errors=%d parse=%d",pass+1,status,net,count,seen,marked,errors,parsed);
+        buf_free(&buf);
     }
-    buf_free(&b);
+    curl_slist_free_all(h);http_free(c);
 }
 int twitch_fetch_media(const char *login,const char *oauth,int kind,twitch_media_t *out,int max,char *err,size_t errlen,volatile int *abort_flag){
     char id[32],url[256];buf_t b={0};long status=0;int n=-1,net=0;
