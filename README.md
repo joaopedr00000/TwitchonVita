@@ -4,10 +4,22 @@ Cliente de directos de Twitch para PS Vita (VitaSDK). Reproduce con los decodifi
 por hardware (H.264 + AAC), permite iniciar sesión con tu cuenta sin escribir la contraseña
 en la consola y navegar por tus canales seguidos, los más vistos y la búsqueda.
 
+## TLS Fixer — requisito para enviar mensagens no chat / chat sending requirement
+
+**[Download TLS Fixer (vita_tls_fixer) by devnoname120](https://github.com/devnoname120/vita_tls_fixer/releases/latest)**
+
+> **Português (Brasil):** Para utilizar o envio de mensagens no chat na versão Classic com suporte ao TLS Fixer, é necessário instalar o plugin **vita_tls_fixer 0.2.3 ou superior**, na opção **Full** ou **System + certificados atualizados**, e reiniciar o PS Vita. A instalação somente para o navegador não é suficiente. Não combine o TLS Fixer com iTLS-Enso ou vitals. Saia da conta Twitch e entre novamente para autorizar a permissão `user:write:chat`. O envio utiliza HTTPS nativo do PS Vita com verificação de certificados, permitindo TLS 1.2/1.3 conforme a negociação com o servidor.
+
+> **English:** To send chat messages in the TLS Fixer-enabled Classic build, install **vita_tls_fixer 0.2.3 or later**, using **Full** or **System + updated certificates**, then reboot the PS Vita. Browser-only installation is insufficient. Do not combine TLS Fixer with iTLS-Enso or vitals. Sign out of Twitch and sign in again to grant `user:write:chat`. Sending uses Sony's native HTTPS APIs with certificate verification and TLS 1.2/1.3 negotiation.
+
+> **Español:** Para enviar mensajes en el chat en la versión Classic compatible con TLS Fixer, instala **vita_tls_fixer 0.2.3 o posterior**, con **Full** o **System + certificados actualizados**, y reinicia la PS Vita. La instalación solo para el navegador no es suficiente. No combines TLS Fixer con iTLS-Enso ni vitals. Cierra sesión en Twitch y vuelve a iniciarla para autorizar `user:write:chat`. El envío utiliza HTTPS nativo con verificación de certificados y negociación TLS 1.2/1.3.
+
+**Development status / Estado:** Native HTTPS chat sending is currently experimental in the [Classic development branch](https://github.com/joaopedr00000/TwitchonVita/tree/visual/twitch-classic), pending physical-console validation. It is not yet part of a public stable release. The plugin is required for the supported modern TLS sending configuration, not for legacy read-only chat or video playback. TLS 1.3 is negotiated, not forced. Thanks to [devnoname120](https://github.com/devnoname120) for TLS Fixer.
+
 ## Descargar e instalar
 
 1. Descarga `VitaTwitch.vpk` de la última versión en
-   [Releases](https://github.com/Dexlei/VitaTwitch/releases/latest).
+   [Releases del fork](https://github.com/joaopedr00000/TwitchonVita/releases/latest).
 2. Cópialo a la Vita (VitaShell: USB o FTP) e instálalo pulsando X sobre el archivo.
    La consola necesita HENkaku/Ensō.
 3. Abre VitaTwitch con la Vita conectada a una red Wi-Fi.
