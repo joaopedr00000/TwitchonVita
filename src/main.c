@@ -46,7 +46,7 @@ int _newlib_heap_size_user = 96 * 1024 * 1024;
 #define SETTINGS_FILE DATA_DIR "/settings.txt"
 #define LOG_FILE      DATA_DIR "/log.txt"
 #define LOG_PREV_FILE DATA_DIR "/log_prev.txt"
-#define APP_VERSION   "1.34-profile-test1"
+#define APP_VERSION   "1.34-profile-test2"
 
 #define MAX_ITEMS 100
 
@@ -843,6 +843,15 @@ static void play_selected(void)
     char clean_title[200];
     ui_clean_text(title ? title : "", clean_title, sizeof(clean_title));
     player_params_t pp;
+    char channel_avatar[192]="",channel_game[96]="";
+    for(int t=0;t<TAB_COUNT;t++){
+        tab_t *tb=&g_tabs[t];
+        for(int i=0;i<tb->count;i++)if(!strcmp(tb->items[i].login,login)){
+            snprintf(channel_avatar,sizeof(channel_avatar),"%s",tb->items[i].avatar);
+            snprintf(channel_game,sizeof(channel_game),"%s",tb->items[i].game);
+            break;
+        }
+    }
     int retries=0, reductions=0, r=0, ad_switched=0;
     int requested=-1,rollback=-1,manual=0;
     static char ad_backup[M3U8_URL_MAX];
@@ -854,6 +863,8 @@ static void play_selected(void)
     pp.url = play_list[sel]->url;
     pp.channel = display && display[0] ? display : login;
     pp.title = clean_title;
+    pp.profile_avatar=channel_avatar;pp.profile_game=channel_game;
+    pp.profile_label=profile_label(0);pp.follow_label=profile_label(1);
     pp.quality = play_list[sel]->name;
     pp.width = play_list[sel]->width;
     pp.height = play_list[sel]->height;

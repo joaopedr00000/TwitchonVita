@@ -29,6 +29,7 @@
 #include "tls_trust.h"
 #include "json.h"
 #include <psp2/power.h>
+#include <psp2/appmgr.h>
 
 #include <malloc.h>
 #include <stdio.h>
@@ -748,6 +749,13 @@ static int viewer_fetch(void *arg,volatile int *abort_flag)
     return rc;
 }
 
+typedef struct {char login[32],bio[512];} live_profile_job_t;
+static int live_profile_fetch(void *arg,volatile int *abort_flag)
+{
+    live_profile_job_t *j=arg;
+    return twitch_fetch_channel_bio(j->login,j->bio,sizeof(j->bio),abort_flag);
+}
+
 typedef struct {
     const player_params_t *pp;
     int osd;
@@ -761,6 +769,8 @@ typedef struct {
     int menu_sel;
     int ime_active;
     int quality_menu,quality_sel,quality_top;
+    int profile_open,profile_sel,profile_loading,profile_fetched;
+    char profile_url[96],profile_bio[512];
     int decoded_w,decoded_h,display_w,display_h;
     const char *notice;   /* transient send/authentication feedback */
     uint64_t notice_until;
@@ -784,6 +794,9 @@ static void draw_view(const vslot_t *frame, view_t *vw)
     int AW = chat ? SCREEN_W - CHAT_PANEL_W : SCREEN_W; /* video area width */
 
     img_frame(); /* emote textures (must run before start_drawing) */
+    vita2d_texture *profile_avatar=NULL;
+    if(vw->profile_open&&vw->pp->profile_avatar&&*vw->pp->profile_avatar)
+        profile_avatar=img_get(vw->pp->profile_avatar);
     if (chat)
         chat_view_update(CHAT_PANEL_W, SCREEN_H, vw->pp->font, vw->pp->channel);
     vita2d_start_drawing();
@@ -843,12 +856,13 @@ static void draw_view(const vslot_t *frame, view_t *vw)
         int vw_width=ui_text_w(0.92f,caption)+20;if(vw_width>AW/2)vw_width=AW/2;
         ui_text_fit(AW-vw_width,SCREEN_H-12,vw_width-12,C_WHITE,0.92f,caption);
         if(vw->viewers_busy)ui_spinner(AW-vw_width-8,SCREEN_H-19,5,C_PURPLE);
-        int cell=(AW-vw_width-30)/3;
+        int cell=(AW-vw_width-30)/4;
         ui_hint_bounded(10,SCREEN_H-12,cell,vw->pp->btn_back==SCE_CTRL_CIRCLE?"O":"X",vt_tr(VT_I_EXIT));
         ui_hint_bounded(10+cell,SCREEN_H-12,cell,"△",vt_tr(VT_I_SHOW_INFO));
         ui_hint_bounded(10+2*cell,SCREEN_H-12,cell,"□",vt_tr(VT_I_CHAT));
+        ui_hint_bounded(10+3*cell,SCREEN_H-12,cell,"START",vw->pp->profile_label?vw->pp->profile_label:"Profile");
     }
-    if(vw->pp->diagnostics && !vw->menu && !vw->quality_menu){
+    if(vw->pp->diagnostics && !vw->menu && !vw->quality_menu && !vw->profile_open){
         char a[160],b[160];
         snprintf(a,sizeof(a),"%s %.1f | %s %.2f Mbps | %s %d MHz",vt_opt(VT_O_FPS),vw->fps_now,vt_opt(VT_O_RATE),g_pl.hls.download_kbps/1000.0,vt_opt(VT_O_CPU),vw->cpu_mhz);
         snprintf(b,sizeof(b),"%s %.1f s | %s %d | %s %d",vt_opt(VT_O_BUFFER),pq_span(&g_pl.aq)/90000.0,vt_opt(VT_O_REBUFFERS),g_pl.rebuffers,vt_opt(VT_O_DROPPED),vw->dropped);
@@ -862,7 +876,51 @@ static void draw_view(const vslot_t *frame, view_t *vw)
         ui_text_fit(10,116,AW-20,COLOR_WHITE,0.85f,b);
         ui_text_fit(10,141,AW-20,COLOR_WHITE,0.85f,dims);
     }
-    if(vw->quality_menu){
+    if(vw->profile_open){
+        const int x=92,y=32,w=776,h=480;
+        vita2d_draw_rectangle(0,0,SCREEN_W,SCREEN_H,RGBA8(0,0,0,190));
+        ui_round_rect(x,y,w,h,12,C_SURFACE);
+        vita2d_draw_rectangle(x+12,y,w-24,3,C_PURPLE);
+        ui_text_fit(x+24,y+36,w-48,C_WHITE,1.15f,vw->pp->profile_label?vw->pp->profile_label:"Profile");
+        if(profile_avatar)ui_image(profile_avatar,x+24,y+52,76,76);
+        else vita2d_draw_fill_circle(x+62,y+90,38,C_PANEL2);
+        ui_text_fit(x+116,y+77,w-142,C_WHITE,1.35f,vw->pp->channel);
+        char line[192],digits[32];
+        snprintf(line,sizeof(line),"@%s",vw->pp->login?vw->pp->login:"");
+        ui_text_fit(x+116,y+103,w-142,C_GREY,.9f,line);
+        int count=vw->pp->viewer_count?*vw->pp->viewer_count:-1;
+        if(count>=0)ui_fmt_viewers(count,digits,sizeof(digits));else snprintf(digits,sizeof(digits),"--");
+        snprintf(line,sizeof(line),"%s | %s | %s",vt_tr(VT_I_LIVE),digits,vw->pp->profile_game?vw->pp->profile_game:"");
+        ui_text_fit(x+116,y+127,w-142,C_RED,.82f,line);
+        ui_text_fit(x+24,y+157,w-48,C_WHITE,.88f,vw->pp->title?vw->pp->title:"");
+        if(vw->profile_loading)ui_text_fit(x+24,y+187,w-48,C_GREY,.85f,vt_tr(VT_I_LOADING));
+        else {
+            const char *s=vw->profile_bio;
+            for(int row=0;row<3&&*s;row++){
+                char part[256];size_t n=0,best=0,space=0;
+                while(s[n]&&s[n]!='\n'){
+                    size_t k=n+1;while(s[k]&&((unsigned char)s[k]&0xc0)==0x80)k++;
+                    if(k>=sizeof(part))break;
+                    memcpy(part,s,k);part[k]=0;if(ui_text_w(.82f,part)>w-48)break;
+                    if(s[n]==' ')space=n;best=k;n=k;
+                }
+                if(!best&&*s!='\n'){best=1;while(s[best]&&((unsigned char)s[best]&0xc0)==0x80)best++;}
+                if(s[best]&&s[best]!='\n'&&space)best=space;
+                if(row==2){ui_text_fit(x+24,y+187+row*24,w-48,C_GREY,.82f,s);break;}
+                memcpy(part,s,best);part[best]=0;ui_text_fit(x+24,y+187+row*24,w-48,C_GREY,.82f,part);
+                s+=best;while(*s==' '||*s=='\n')s++;
+            }
+        }
+        int lang=vt_lang_current();
+        const char *note=lang==2?"Seguir abre a Twitch oficial no navegador.":lang==1?"Seguir abre Twitch oficial en el navegador.":"Follow opens official Twitch in the browser.";
+        ui_text_fit(x+24,y+270,w-48,C_GREY,.75f,note);
+        ui_text_fit(x+24,y+294,w-48,C_GREY,.8f,vw->profile_url);
+        const char *labels[]={vw->pp->follow_label?vw->pp->follow_label:"Follow / unfollow",vt_tr(VT_I_BACK)};
+        for(int i=0;i<2;i++){
+            int yy=y+310+i*44;ui_round_rect(x+24,yy,w-48,41,5,i==vw->profile_sel?C_PURPLE:C_PANEL);
+            ui_text_fit(x+38,yy+26,w-76,C_WHITE,.93f,labels[i]);
+        }
+    }else if(vw->quality_menu){
         int n=vw->pp->variant_count,vis=n<6?n:6;
         const int x=210,w=540,row=48,h=120+vis*row,y=(SCREEN_H-h)/2,ly=y+55;
         vita2d_draw_rectangle(0,0,SCREEN_W,SCREEN_H,RGBA8(0,0,0,190));
@@ -884,15 +942,15 @@ static void draw_view(const vslot_t *frame, view_t *vw)
         ui_hint_bounded(x+28,y+h-27,w/2-48,vw->pp->btn_back==SCE_CTRL_CIRCLE?"X":"O",vt_tr(VT_I_PLAY));
         ui_hint_bounded(x+w/2+20,y+h-27,w/2-48,vw->pp->btn_back==SCE_CTRL_CIRCLE?"O":"X",vt_tr(VT_I_BACK));
     }else if(vw->menu){
-        static const vt_text_id labels[]={VT_I_CHAT,VT_I_SHOW_INFO,VT_I_QUALITY,VT_I_SEND_MESSAGE,VT_I_CLOSE,VT_I_EXIT};
+        static const vt_text_id labels[]={VT_I_CHAT,VT_I_SHOW_INFO,VT_I_QUALITY,VT_I_SEND_MESSAGE,VT_I_CLOSE,VT_I_CLOSE,VT_I_EXIT};
         vita2d_draw_rectangle(0,0,SCREEN_W,SCREEN_H,RGBA8(0,0,0,190));
-        ui_round_rect(205,56,550,432,12,C_SURFACE);
-        ui_text_fit(233,96,494,C_WHITE,1.25f,vt_tr(VT_I_MENU));
-        for(int i=0;i<6;i++){
-            int y=108+i*58;
+        ui_round_rect(205,40,550,464,12,C_SURFACE);
+        ui_text_fit(233,78,494,C_WHITE,1.25f,vt_tr(VT_I_MENU));
+        for(int i=0;i<7;i++){
+            int y=90+i*56;
             if(i==vw->menu_sel)ui_round_rect(222,y,516,49,8,C_PURPLE);
             const char *label=labels[i]==VT_I_SHOW_INFO?
-                 (vw->osd?vt_tr(VT_I_HIDE_INFO):vt_tr(VT_I_SHOW_INFO)):vt_tr(labels[i]);
+                 (vw->osd?vt_tr(VT_I_HIDE_INFO):vt_tr(VT_I_SHOW_INFO)):i==4?(vw->pp->profile_label?vw->pp->profile_label:"Profile"):vt_tr(labels[i]);
             ui_text_fit(245,y+32,(i==0||i==2)?370:470,C_WHITE,1.02f,label);
             if(i==0)ui_text_fit(625,y+32,100,C_WHITE,0.92f,chat?vt_tr(VT_I_ON):vt_tr(VT_I_OFF));
             if(i==2)ui_text_fit(625,y+32,100,C_WHITE,0.92f,vw->pp->quality);
@@ -1014,6 +1072,8 @@ int player_run(const player_params_t *pp, char *err, int errlen)
     ui_input_poll(&input); /* swallow X from quality selector */
     int should_exit=0;
     task_t viewer_task={0};viewer_job_t viewer_job={0};
+    task_t profile_task={0};live_profile_job_t profile_job={0};
+    if(pp->login)snprintf(profile_job.login,sizeof(profile_job.login),"%s",pp->login);
     if(pp->login)snprintf(viewer_job.login,sizeof(viewer_job.login),"%s",pp->login);
     uint64_t viewer_last_request=0;
 
@@ -1035,7 +1095,12 @@ int player_run(const player_params_t *pp, char *err, int errlen)
 
         ui_input_poll(&input);
         unsigned pressed=input.pressed;
-        int refresh_viewers=0,write_chat=0;
+        int refresh_viewers=0,write_chat=0,open_profile=0;
+        if(view.profile_loading&&task_done(&profile_task)){
+            view.profile_loading=0;view.profile_fetched=1;
+            if(profile_task.result==0)snprintf(view.profile_bio,sizeof(view.profile_bio),"%s",profile_job.bio);
+            last_draw=0;
+        }
         if(view.ime_active){
             SceCommonDialogStatus ime_status=sceImeDialogGetStatus();
             if(ime_status==SCE_COMMON_DIALOG_STATUS_FINISHED){
@@ -1051,6 +1116,22 @@ int player_run(const player_params_t *pp, char *err, int errlen)
                 view.ime_active=0;last_draw=0;
             }
             pressed=0;input.touch_tap=0;
+        }else if(view.profile_open){
+            int accept=pp->btn_back==SCE_CTRL_CIRCLE?SCE_CTRL_CROSS:SCE_CTRL_CIRCLE;
+            int choose=!!(pressed&accept);
+            if(pressed&(pp->btn_back|SCE_CTRL_START|SCE_CTRL_SELECT)){view.profile_open=0;choose=0;}
+            else {
+                if(pressed&(SCE_CTRL_UP|SCE_CTRL_DOWN))view.profile_sel=1-view.profile_sel;
+                for(int i=0;i<2;i++)if(ui_touch_hit(&input,116,342+i*44,728,41)){view.profile_sel=i;choose=1;break;}
+                if(choose){
+                    if(view.profile_sel==1)view.profile_open=0;
+                    else if(view.profile_url[0]){
+                        int rc=sceAppMgrLaunchAppByUri(0xFFFFF,view.profile_url);
+                        LOGI("profile: browser result=0x%08X",(unsigned)rc);
+                    }
+                }
+            }
+            if(pressed||input.touch_tap)last_draw=0;
         }else {
             int accept=pp->btn_back==SCE_CTRL_CIRCLE?SCE_CTRL_CROSS:SCE_CTRL_CIRCLE;
             if(view.quality_menu){
@@ -1080,12 +1161,12 @@ int player_run(const player_params_t *pp, char *err, int errlen)
             }else{
             if(pressed&SCE_CTRL_SELECT){view.menu=!view.menu;view.menu_sel=0;last_draw=0;}
             if(view.menu){
-                if(pressed&SCE_CTRL_UP)view.menu_sel=(view.menu_sel+5)%6;
-                if(pressed&SCE_CTRL_DOWN)view.menu_sel=(view.menu_sel+1)%6;
+                if(pressed&SCE_CTRL_UP)view.menu_sel=(view.menu_sel+6)%7;
+                if(pressed&SCE_CTRL_DOWN)view.menu_sel=(view.menu_sel+1)%7;
                 if(input.touch_tap){
                     int hit=0;
-                    for(int i=0;i<6;i++)
-                        if(ui_touch_hit(&input,222,108+i*58,516,49)){
+                    for(int i=0;i<7;i++)
+                        if(ui_touch_hit(&input,222,90+i*56,516,49)){
                             view.menu_sel=i;pressed|=accept;hit=1;break;
                         }
                     if(!hit)view.menu=0;
@@ -1110,12 +1191,14 @@ int player_run(const player_params_t *pp, char *err, int errlen)
                             }
                             last_draw=0;break;
                         case 3:write_chat=1;view.menu=0;break;
-                        case 4:view.menu=0;break;
-                        case 5:should_exit=1;break;
+                        case 4:open_profile=1;view.menu=0;break;
+                        case 5:view.menu=0;break;
+                        case 6:should_exit=1;break;
                     }
                 }
             }else{
                 if(pressed&pp->btn_back)should_exit=1;
+                if(pressed&SCE_CTRL_START)open_profile=1;
                 if(pressed&SCE_CTRL_RTRIGGER)write_chat=1;
                 if(pressed&SCE_CTRL_TRIANGLE){view.osd=!view.osd;osd_until=view.osd?now_us+5000000ULL:0;refresh_viewers=view.osd;last_draw=0;}
                 if((pressed&SCE_CTRL_SQUARE)&&pp->chat_on&&pp->login){
@@ -1135,6 +1218,7 @@ int player_run(const player_params_t *pp, char *err, int errlen)
                 if(input.touch_tap){
                     int aw=(pp->chat_on&&*pp->chat_on)?SCREEN_W-CHAT_PANEL_W:SCREEN_W;
                     if(aw<SCREEN_W&&input.touch_x>=aw&&input.touch_y>=SCREEN_H-38)write_chat=1;
+                    else if(view.osd&&input.touch_y<64&&input.touch_x<aw/2)open_profile=1;
                     else if(view.osd&&input.touch_y<64&&input.touch_x>=aw/2&&input.touch_x<aw&&pp->variants&&pp->variant_count>0&&pp->variant_requested){
                         view.quality_menu=1;view.quality_sel=pp->variant_current;
                         if(view.quality_sel<0||view.quality_sel>=pp->variant_count)view.quality_sel=0;
@@ -1146,7 +1230,12 @@ int player_run(const player_params_t *pp, char *err, int errlen)
             }
         }
         if(should_exit)break;
-        if(write_chat&&!view.ime_active){
+        if(open_profile&&twitch_channel_url(pp->login,view.profile_url,sizeof(view.profile_url))==0){
+            view.profile_open=1;view.profile_sel=0;view.menu=0;view.quality_menu=0;last_draw=0;
+            if(!view.profile_loading&&!view.profile_fetched&&task_start(&profile_task,live_profile_fetch,&profile_job)==0)view.profile_loading=1;
+            LOGI("profile: opened in player @%s",pp->login);
+        }
+        if(write_chat&&!view.profile_open&&!view.ime_active){
             LOGI("chat: compose requested logged=%d reader=%d ready=%d",pp->chat_oauth&&*pp->chat_oauth,chat_running(),chat_can_send());
             if(!pp->chat_oauth||!*pp->chat_oauth||!pp->chat_nick||!*pp->chat_nick){
                 view.notice=vt_tr(VT_I_LOGIN_TO_CHAT);view.notice_until=now_us+3000000ULL;
@@ -1358,6 +1447,7 @@ int player_run(const player_params_t *pp, char *err, int errlen)
 
     if(view.ime_active){sceImeDialogAbort();sceImeDialogTerm();}
     if(view.viewers_busy){task_cancel(&viewer_task);while(!task_done(&viewer_task))sceKernelDelayThread(10000);}
+    if(view.profile_loading){task_cancel(&profile_task);while(!task_done(&profile_task))sceKernelDelayThread(10000);}
     /* teardown: unblock producers first, then stop threads */
     pq_abort(&pl->vq);
     pq_abort(&pl->aq);

@@ -8,6 +8,7 @@ typedef struct {
     const char *url;        /* media playlist of the chosen quality */
     const char *channel;    /* display name */
     const char *title;      /* stream title (may be empty) */
+    const char *profile_avatar,*profile_game,*profile_label,*follow_label;
     const char *quality;    /* label shown in the OSD */
     int width, height;      /* from the master playlist (0 = unknown) */
     float fps;              /* from the master playlist (0 = unknown) */
