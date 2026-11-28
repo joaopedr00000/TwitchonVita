@@ -45,7 +45,7 @@ int _newlib_heap_size_user = 96 * 1024 * 1024;
 #define SETTINGS_FILE DATA_DIR "/settings.txt"
 #define LOG_FILE      DATA_DIR "/log.txt"
 #define LOG_PREV_FILE DATA_DIR "/log_prev.txt"
-#define APP_VERSION   "1.34-media-playback-test21"
+#define APP_VERSION   "1.34-media-playback-test22"
 
 #define MAX_ITEMS 100
 
@@ -1959,32 +1959,32 @@ static int play_clip_mp4(twitch_media_t *v,char *failure,size_t failure_cap){
     scePowerSetArmClockFrequency(vt_profile_clock(g_profile,pp.height,pp.fps));int rc=player_run(&pp,err,sizeof(err));scePowerSetArmClockFrequency(333);
     if(rc<0||rc==PLAYER_RECONNECT){snprintf(failure,failure_cap,"%s",err[0]?err:"MP4 playback failed");return -1;}return 0;
 }
-static void recorded_play(const twitch_media_t *v){
+static int recorded_play(const twitch_media_t *v,int can_previous,int can_next){
     if(!strcmp(v->type,"clip")){
         twitch_media_t resolved=*v;char failure[192]="";v=&resolved;
-        if(play_clip_mp4(&resolved,failure,sizeof(failure))==0)return;
-        if(!v->vod_id[0]||v->offset<0||v->seconds<1||v->offset>604800-v->seconds){char message[256];snprintf(message,sizeof(message),"%s\n%s",failure,vt_lang_current()==2?"Sem gravação de origem disponível.":"No source VOD available.");modal_message("Clip",message);return;}
+        if(play_clip_mp4(&resolved,failure,sizeof(failure))==0)return 0;
+        if(!v->vod_id[0]||v->offset<0||v->seconds<1||v->offset>604800-v->seconds){char message[256];snprintf(message,sizeof(message),"%s\n%s",failure,vt_lang_current()==2?"Sem gravação de origem disponível.":"No source VOD available.");modal_message("Clip",message);return 0;}
         static vod_job_t clip_job;memset(&clip_job,0,sizeof(clip_job));snprintf(clip_job.id,sizeof(clip_job.id),"%s",v->vod_id);snprintf(clip_job.oauth,sizeof(clip_job.oauth),"%s",g_logged?g_auth.access:"");
-        task_t ct={0};if(run_with_spinner(&ct,vod_job_run,&clip_job,vt_lang_current()==2?"Carregando clipe pela gravação...":"Loading clip from source VOD...")<0)return;
+        task_t ct={0};if(run_with_spinner(&ct,vod_job_run,&clip_job,vt_lang_current()==2?"Carregando clipe pela gravação...":"Loading clip from source VOD...")<0)return 0;
         m3u8_variant_t *options[M3U8_MAX_VARIANTS];int cn=0;
         for(int i=0;i<clip_job.n;i++)if(!clip_job.v[i].audio_only&&clip_job.v[i].height>0&&clip_job.v[i].height<=720&&!strncmp(clip_job.v[i].url,"https://",8))options[cn++]=&clip_job.v[i];
-        if(!cn){modal_message("Clip",clip_job.err[0]?clip_job.err:"Source VOD unavailable");return;}
+        if(!cn){modal_message("Clip",clip_job.err[0]?clip_job.err:"Source VOD unavailable");return 0;}
         int cs=vt_profile_pick(options,cn,g_profile);if(cs<0||cs>=cn)cs=0;
         twitch_media_t source=*v;snprintf(source.id,sizeof(source.id),"%s",v->vod_id);source.seconds=v->offset+v->seconds;
-        clip_preview(v->channel,&source,options[cs],NULL,v->offset,v->offset+v->seconds);return;
+        clip_preview(v->channel,&source,options[cs],NULL,v->offset,v->offset+v->seconds);return 0;
     }
     static vod_job_t j;memset(&j,0,sizeof(j));snprintf(j.id,sizeof(j.id),"%s",v->id);snprintf(j.oauth,sizeof(j.oauth),"%s",g_logged?g_auth.access:"");
-    task_t task={0};if(run_with_spinner(&task,vod_job_run,&j,vt_lang_current()==2?"Carregando gravação...":"Loading recording...")<0)return;
-    if(j.n<=0){modal_message("VOD",j.err[0]?j.err:"No compatible quality");return;}
+    task_t task={0};if(run_with_spinner(&task,vod_job_run,&j,vt_lang_current()==2?"Carregando gravação...":"Loading recording...")<0)return 0;
+    if(j.n<=0){modal_message("VOD",j.err[0]?j.err:"No compatible quality");return 0;}
     m3u8_variant_t *variants[M3U8_MAX_VARIANTS];int n=0;
     for(int i=0;i<j.n;i++)if(!j.v[i].audio_only&&j.v[i].height>0&&j.v[i].height<=720&& !strncmp(j.v[i].url,"https://",8))variants[n++]=&j.v[i];
-    if(!n){modal_message("VOD","No compatible H.264 quality <= 720p");return;}
+    if(!n){modal_message("VOD","No compatible H.264 quality <= 720p");return 0;}
     int sel=vt_profile_pick(variants,n,g_profile);if(sel<0||sel>=n)sel=0;
     media_load();int index=media_find(v->id),pos=index>=0?media_saved[index].pos:0;
     if(pos<0||(v->seconds>0&&pos>=v->seconds-2))pos=0;
     for(;;){
         player_params_t pp={0};m3u8_variant_t *q=variants[sel];char err[192]="";int target=pos,requested=sel;
-        pp.recorded=1;pp.start_seconds=pos;pp.duration_seconds=v->seconds;pp.position_seconds=&pos;pp.seek_requested=&target;
+        pp.recorded=1;pp.media_navigation=1;pp.can_previous=can_previous;pp.can_next=can_next;pp.start_seconds=pos;pp.duration_seconds=v->seconds;pp.position_seconds=&pos;pp.seek_requested=&target;
         pp.url=q->url;pp.channel=v->channel;pp.title=v->title;pp.quality=q->name;pp.width=q->width;pp.height=q->height;pp.fps=q->fps;
         pp.font=ui_font;pp.btn_back=g_btn_back;pp.profile=g_profile;pp.volume=&g_volume;pp.variants=variants;pp.variant_count=n;pp.variant_current=sel;pp.variant_requested=&requested;
         scePowerSetArmClockFrequency(vt_profile_clock(g_profile,pp.height,pp.fps));
@@ -1993,12 +1993,14 @@ static void recorded_play(const twitch_media_t *v){
         if(rc==PLAYER_RECORDING_END)pos=0;
         if(rc==PLAYER_SEEK)pos=target;
         if(media_remember(v,pos,0)<0)toast("Could not save playback position");
+        if(rc==PLAYER_PREVIOUS_MEDIA||rc==PLAYER_NEXT_MEDIA)return rc;
         if(rc==PLAYER_SEEK)continue;
         if(rc==PLAYER_CHANGE_QUALITY&&requested>=0&&requested<n){sel=requested;continue;}
         if(rc==PLAYER_CREATE_CLIP){clip_dialog(v->channel,v,pos,q,NULL);continue;}
         if(rc<0||rc==PLAYER_RECONNECT)modal_message("VOD",err[0]?err:"Recording playback failed");
         break;
     }
+    return 0;
 }
 static const char *media_kind(int k){static const char *pt[]={"Todos","Gravações","Destaques","Publicados","Clipes","Salvos","Continuar"};static const char *en[]={"All","Past broadcasts","Highlights","Uploads","Clips","Saved","Continue"};return vt_lang_current()==2?pt[k]:en[k];}
 static void recordings_screen(const twitch_stream_t *channel){recordings_screen_kind(channel,channel?0:5);}
@@ -2024,7 +2026,20 @@ static void recordings_screen_kind(const twitch_stream_t *channel,int initial){
                 int top=sel/5*5;
                 for(int k=0;k<5&&top+k<j.n;k++)if(ui_touch_hit(&g_in,42,100+k*78,876,74)){sel=top+k;b|=g_btn_ok;break;}
                 if(b&SCE_CTRL_SQUARE){if(!strcmp(j.out[sel].type,"clip"))toast("Clip bookmarks not available");else if(media_remember(&j.out[sel],-1,1)<0)toast("Could not save video");else {toast(vt_lang_current()==2?"Favorito atualizado":"Bookmark updated");if(kind>=5)reload=1;}}
-                if(b&g_btn_ok){twitch_media_t v=j.out[sel];recorded_play(&v);if(kind>=5)reload=1;}
+                if(b&g_btn_ok){
+                    for(;;){
+                        int prev=sel-1,next=sel+1;
+                        while(prev>=0&&!strcmp(j.out[prev].type,"clip"))prev--;
+                        while(next<j.n&&!strcmp(j.out[next].type,"clip"))next++;
+                        twitch_media_t v=j.out[sel];
+                        int rc=recorded_play(&v,prev>=0,next<j.n);
+                        if(rc==PLAYER_PREVIOUS_MEDIA&&prev>=0){sel=prev;continue;}
+                        if(rc==PLAYER_NEXT_MEDIA&&next<j.n){sel=next;continue;}
+                        break;
+                    }
+                    ui_input_poll(&g_in);
+                    if(kind>=5)reload=1;
+                }
             }
             frame_begin();vita2d_draw_rectangle(0,0,960,544,CLASSIC_BG);
             ui_text_fit(28,34,900,C_WHITE,1.25f,channel?channel->display:vt_lang_current()==2?"Biblioteca de vídeos":"Video library");

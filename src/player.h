@@ -25,6 +25,7 @@ typedef struct {
     const char *chat_sender_id;
     int profile;
     int recorded,start_seconds,duration_seconds;
+    int media_navigation,can_previous,can_next;
     int preview_end;
     const char *preview_playlist;
     m3u8_preview_t *live_capture;
@@ -52,6 +53,8 @@ typedef struct {
 #define PLAYER_CREATE_CLIP 7
 #define PLAYER_CHANNEL_VIDEOS 8
 #define PLAYER_FULL_PROFILE 9
+#define PLAYER_PREVIOUS_MEDIA 10
+#define PLAYER_NEXT_MEDIA 11
 int player_run(const player_params_t *pp, char *err, int errlen);
 
 #endif
