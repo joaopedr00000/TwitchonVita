@@ -870,7 +870,7 @@ static void *chat_thread(void *argp)
                         if(!room_id[0])irc_tag(&line,"room-id",room_id,sizeof(room_id));
                     }else if(!strcmp(line.command,"JOIN")){
                         if(!join_reported){join_reported=1;set_status(vt_msg("Conectado"));push_system(vt_msg("Conectado al chat"));}
-                        pthread_mutex_lock(&C.lock);C.writable=C.oauth[0]&&numeric_id(C.sender_id);pthread_mutex_unlock(&C.lock);
+                        /* Sending is independent of the anonymous JOIN event. */
                     }else if(!strcmp(line.command,"RECONNECT"))ok=0;
                     else if(!strcmp(line.command,"CLEARCHAT")&&!line.has_trailing)push_system(vt_msg("El chat ha sido borrado por un moderador"));
                     else if(chat_build_msg(&line,&msg)==0)push_msg(&msg);
@@ -880,7 +880,7 @@ static void *chat_thread(void *argp)
             have=strlen(start);memmove(rbuf,start,have+1);if(have>=sizeof(rbuf)-1)have=0;
         }
         if(c)curl_easy_cleanup(c);
-        pthread_mutex_lock(&C.lock);int lost=C.queued;C.queued=C.awaiting=C.writable=0;C.outgoing[0]=0;pthread_mutex_unlock(&C.lock);
+        pthread_mutex_lock(&C.lock);int lost=C.queued;C.queued=C.awaiting=0;C.outgoing[0]=0;pthread_mutex_unlock(&C.lock);
         if(lost&&!C.stop)push_system(vt_msg("Failed to send chat message"));
         if(!C.running)break;
         set_status(vt_msg("Chat desconectado, reintentando en %d s..."),backoff);
@@ -911,6 +911,7 @@ void chat_start(const char *login,const char *nick,const char *oauth,const char 
     if(nick&&oauth&&*nick&&*oauth&&strlen(nick)<sizeof(C.nick)&&strlen(oauth)<sizeof(C.oauth)&&strspn(nick,"abcdefghijklmnopqrstuvwxyz0123456789_")==strlen(nick)&&strspn(oauth,"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")==strlen(oauth)){
         snprintf(C.nick,sizeof(C.nick),"%s",nick);snprintf(C.oauth,sizeof(C.oauth),"%s",oauth);if(numeric_id(sender_id))snprintf(C.sender_id,sizeof(C.sender_id),"%s",sender_id);
     }
+    C.writable=C.oauth[0]&&numeric_id(C.sender_id);
     C.version++;
     twitch_sanitize_login(login,C.login,sizeof(C.login));
     snprintf(C.status, sizeof(C.status), "%s", vt_msg("Conectando al chat..."));

@@ -774,7 +774,9 @@ static int open_chat_keyboard(void){
     param.supportedLanguages=SCE_IME_LANGUAGE_ENGLISH|SCE_IME_LANGUAGE_SPANISH|SCE_IME_LANGUAGE_PORTUGUESE_BR|SCE_IME_LANGUAGE_FRENCH|SCE_IME_LANGUAGE_GERMAN|SCE_IME_LANGUAGE_ITALIAN|SCE_IME_LANGUAGE_RUSSIAN|SCE_IME_LANGUAGE_JAPANESE|SCE_IME_LANGUAGE_KOREAN|SCE_IME_LANGUAGE_SIMPLIFIED_CHINESE|SCE_IME_LANGUAGE_TRADITIONAL_CHINESE|SCE_IME_LANGUAGE_TURKISH;
     param.languagesForced=SCE_FALSE;param.type=SCE_IME_TYPE_DEFAULT;param.dialogMode=SCE_IME_DIALOG_DIALOG_MODE_WITH_CANCEL;param.textBoxMode=SCE_IME_DIALOG_TEXTBOX_MODE_WITH_CLEAR;
     param.title=chat_title16;param.maxTextLength=150;param.initialText=chat_initial16;param.inputTextBuffer=chat_buffer16;
-    return sceImeDialogInit(&param)>=0;
+    int rc=sceImeDialogInit(&param);
+    LOGI("chat: sceImeDialogInit rc=%08X",(unsigned)rc);
+    return rc;
 }
 static void draw_view(const vslot_t *frame, view_t *vw)
 {
@@ -1035,12 +1037,20 @@ int player_run(const player_params_t *pp, char *err, int errlen)
         unsigned pressed=input.pressed;
         int refresh_viewers=0,write_chat=0;
         if(view.ime_active){
-            if(sceImeDialogGetStatus()==SCE_COMMON_DIALOG_STATUS_FINISHED){
-                SceImeDialogResult result={0};sceImeDialogGetResult(&result);sceImeDialogTerm();view.ime_active=0;
-                if(result.button==SCE_IME_DIALOG_BUTTON_ENTER){char message[CHAT_TEXT_MAX];vt_utf16_to_utf8(message,sizeof(message),(const uint16_t*)chat_buffer16,256);int rc=chat_queue_message(message);
-                    view.notice=vt_msg(rc==0?"Message queued (server confirmation pending)":rc==-2?"Please slow down (chat rate limit)":rc==-3?"Message empty or too long":"Failed to send chat message");view.notice_until=now_us+3000000ULL;}
+            SceCommonDialogStatus ime_status=sceImeDialogGetStatus();
+            if(ime_status==SCE_COMMON_DIALOG_STATUS_FINISHED){
+                SceImeDialogResult result={0};int result_rc=sceImeDialogGetResult(&result);int term_rc=sceImeDialogTerm();view.ime_active=0;
+                LOGI("chat: keyboard closed result=%08X term=%08X button=%d",(unsigned)result_rc,(unsigned)term_rc,result.button);
+                if(result_rc>=0&&result.button==SCE_IME_DIALOG_BUTTON_ENTER){
+                    char message[CHAT_TEXT_MAX];vt_utf16_to_utf8(message,sizeof(message),(const uint16_t*)chat_buffer16,256);int rc=chat_queue_message(message);
+                    view.notice=vt_msg(rc==0?"Message queued (server confirmation pending)":rc==-2?"Please slow down (chat rate limit)":rc==-3?"Message empty or too long":"Failed to send chat message");view.notice_until=now_us+3000000ULL;
+                }
+                last_draw=0;
+            }else if(ime_status==SCE_COMMON_DIALOG_STATUS_NONE){
+                LOGW("chat: keyboard dialog unexpectedly ended");
+                view.ime_active=0;last_draw=0;
             }
-            pressed=0;input.touch_tap=0;last_draw=0;
+            pressed=0;input.touch_tap=0;
         }else {
             int accept=pp->btn_back==SCE_CTRL_CIRCLE?SCE_CTRL_CROSS:SCE_CTRL_CIRCLE;
             if(view.quality_menu){
@@ -1137,15 +1147,22 @@ int player_run(const player_params_t *pp, char *err, int errlen)
         }
         if(should_exit)break;
         if(write_chat&&!view.ime_active){
-            if(!pp->chat_oauth||!pp->chat_nick){view.notice=vt_tr(VT_I_LOGIN_TO_CHAT);view.notice_until=now_us+3000000ULL;}
-            else if(!chat_can_send()){
+            LOGI("chat: compose requested logged=%d reader=%d ready=%d",pp->chat_oauth&&*pp->chat_oauth,chat_running(),chat_can_send());
+            if(!pp->chat_oauth||!*pp->chat_oauth||!pp->chat_nick||!*pp->chat_nick){
+                view.notice=vt_tr(VT_I_LOGIN_TO_CHAT);view.notice_until=now_us+3000000ULL;
+            }else{
                 if(pp->chat_on)*pp->chat_on=1;
                 if(!chat_running())chat_start(pp->login,pp->chat_nick,pp->chat_oauth,pp->chat_sender_id);
-                chat_status(view.chat_notice,sizeof(view.chat_notice));
-                chat_retry_auth();
-                view.notice=view.chat_notice[0]?view.chat_notice:vt_msg("Conectando al chat...");view.notice_until=now_us+3000000ULL;
-            }else if(open_chat_keyboard())view.ime_active=1;
-            else {view.notice=vt_msg("Cannot open PS Vita keyboard");view.notice_until=now_us+3000000ULL;}
+                /* Composer does not depend on anonymous IRC JOIN or network readiness.
+                   Queue and HTTPS confirmation handle delivery separately. */
+                view.menu=0;view.quality_menu=0;view.notice=NULL;
+                int ime_rc=open_chat_keyboard();
+                if(ime_rc>=0)view.ime_active=1;
+                else{
+                    snprintf(view.chat_notice,sizeof(view.chat_notice),"%s [%08X]",vt_msg("Cannot open PS Vita keyboard"),(unsigned)ime_rc);
+                    view.notice=view.chat_notice;view.notice_until=now_us+5000000ULL;
+                }
+            }
             last_draw=0;
         }
         if(view.viewers_busy&&task_done(&viewer_task)){
@@ -1323,7 +1340,7 @@ int player_run(const player_params_t *pp, char *err, int errlen)
             draw_n++;
             if (t_end - t_draw > draw_max)
                 draw_max = t_end - t_draw;
-        } else if (now_us - last_draw > 100000) {
+        } else if (now_us - last_draw > (view.ime_active?16667ULL:100000ULL)) {
             /* nothing new: keep the status/chat/OSD alive */
             if (!last_draw) LOGI("startup: first player draw begin");
             draw_view(cur >= 0 ? &vp->slot[cur] : NULL, &view);
