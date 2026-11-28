@@ -66,6 +66,13 @@ jobs:
           test "$(grep -c -- '-----BEGIN CERTIFICATE-----' assets/cacert.pem)" -ge 100
           sha256sum assets/cacert.pem | tee ca-bundle.sha256
           echo 'The CA file is obtained over verified GitHub Actions runner HTTPS.' >> "$GITHUB_STEP_SUMMARY"
+      - name: Validate embedded CA generation and OpenSSL trust loading on host
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/vt-ca
+          cmake -DINPUT="$PWD/assets/cacert.pem" -DOUTPUT=/tmp/vt-ca/vt_ca_bundle.h -P cmake/embed_ca.cmake
+          gcc -Wall -Wextra -Werror -Isrc -I/tmp/vt-ca tests/tls_trust_test.c src/tls_trust.c -o /tmp/vt-ca/test $(pkg-config --cflags --libs libcurl openssl)
+          /tmp/vt-ca/test
       - name: Compile VitaTwitch with VitaSDK (no public release)
         shell: bash
         run: |

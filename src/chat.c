@@ -507,6 +507,7 @@ int chat_build_msg(const irc_line_t *l, chat_msg_t *m)
 #ifndef VT_NO_NET
 
 #include "http.h"
+#include "tls_trust.h"
 #include "twitch.h"
 #include <pthread.h>
 #include <stdarg.h>
@@ -658,36 +659,6 @@ static void chat_drop_pending(void)
     pthread_mutex_lock(&C.lock);int lost=C.queued||C.awaiting;C.writable=0;C.queued=C.awaiting=0;C.outgoing[0]=C.pending[0]=0;pthread_mutex_unlock(&C.lock);
     if(lost)push_system(vt_msg("Failed to send chat message"));
 }
-/* Read the bundled CA with Vita file I/O before giving it to libcurl.
- * On older libcurl versions, keep the verified file-based configuration. */
-static void chat_ca(CURL *c)
-{
-    const char *paths[]={"app0:ca/cacert.pem","app0:/ca/cacert.pem"};
-    const char *path=paths[0];
-    FILE *f=fopen(path,"rb");
-    if(!f){path=paths[1];f=fopen(path,"rb");}
-    curl_easy_setopt(c,CURLOPT_CAINFO,path);
-    if(!f){LOGW("chat: CA bundle file could not be opened");return;}
-#if LIBCURL_VERSION_NUM >= 0x074d00
-    if(fseek(f,0,SEEK_END)==0){
-        long len=ftell(f);
-        if(len>0&&len<=1024*1024&&fseek(f,0,SEEK_SET)==0){
-            char *data=malloc((size_t)len);
-            if(data){
-                if(fread(data,1,(size_t)len,f)==(size_t)len){
-                    struct curl_blob blob={data,(size_t)len,CURL_BLOB_COPY};
-                    CURLcode rc=curl_easy_setopt(c,CURLOPT_CAINFO_BLOB,&blob);
-                    LOGI("chat: CA bundle %ld bytes, memory trust setup curl=%d",len,(int)rc);
-                }
-                free(data);
-            }
-        }
-    }
-#else
-    LOGI("chat: CA file opened, libcurl file mode");
-#endif
-    fclose(f);
-}
 static int chat_take_retry(void)
 {
     pthread_mutex_lock(&C.lock);
@@ -722,9 +693,16 @@ static void *chat_thread(void *argp)
             curl_easy_setopt(c,CURLOPT_SSL_VERIFYPEER,authenticated?1L:0L);
             curl_easy_setopt(c,CURLOPT_SSL_VERIFYHOST,authenticated?2L:0L);
             if(authenticated){
-                chat_ca(c);
-                curl_easy_setopt(c,CURLOPT_HTTP_VERSION,CURL_HTTP_VERSION_1_1);
-                curl_easy_setopt(c,CURLOPT_ERRORBUFFER,tls_error);
+                CURLcode trust=vt_tls_configure(c);
+                if(trust!=CURLE_OK){
+                    snprintf(failure,sizeof(failure),"TLS %d",(int)trust);
+                    LOGE("chat: embedded trust setup failed (%d)",(int)trust);
+                    curl_easy_cleanup(c);c=NULL;
+                }
+                if(c){curl_easy_setopt(c,CURLOPT_HTTP_VERSION,CURL_HTTP_VERSION_1_1);
+                    curl_easy_setopt(c,CURLOPT_ERRORBUFFER,tls_error);}
+            }
+            if(c){
             }
             curl_easy_setopt(c, CURLOPT_XFERINFOFUNCTION, abort_cb);
             curl_easy_setopt(c, CURLOPT_NOPROGRESS, 0L);
@@ -744,9 +722,10 @@ static void *chat_thread(void *argp)
                 snprintf(failure,sizeof(failure),"TLS %d",(int)r);
                 LOGE("chat: connect curl=%d verify=%ld (%s) %s",(int)r,verify,curl_easy_strerror(r),tls_error);
             }
+            }
         }
 
-        int welcomed=0,auth_rejected=0,userstate_seen=0,retry_requested=0;
+        int welcomed=0,auth_rejected=0,userstate_seen=0,retry_requested=0,join_reported=0;
         unsigned long long connected_at=sceKernelGetProcessTimeWide();
         size_t have = 0;
         unsigned long long last_rx = sceKernelGetProcessTimeWide();
@@ -810,7 +789,7 @@ static void *chat_thread(void *argp)
                     } else if (!strcmp(line.command, "JOIN")) {
                         set_status(vt_msg("Conectado"));
                         LOGI("chat: conectado a #%s", C.login);
-                        push_system(vt_msg("Conectado al chat"));
+                        if(!join_reported){push_system(vt_msg("Conectado al chat"));join_reported=1;}
                     } else if (!strcmp(line.command, "RECONNECT")) {
                         LOGI("chat: el servidor pide reconectar");
                         ok = 0;

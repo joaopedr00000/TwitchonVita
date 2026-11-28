@@ -26,6 +26,7 @@
 #include "task.h"
 #include "twitch.h"
 #include "http.h"
+#include "tls_trust.h"
 #include "json.h"
 #include <psp2/power.h>
 
@@ -727,9 +728,7 @@ static int viewer_fetch(void *arg,volatile int *abort_flag)
     if(twitch_sanitize_login(j->login,login,sizeof(login))<1||strcmp(login,j->login))return -1;
     snprintf(body,sizeof(body),"{\"query\":\"query { user(login: \\\"%s\\\") { stream { viewersCount } } }\"}",login);
     CURL *curl=http_new();if(!curl)return -1;
-    curl_easy_setopt(curl,CURLOPT_SSL_VERIFYPEER,1L);
-    curl_easy_setopt(curl,CURLOPT_SSL_VERIFYHOST,2L);
-    curl_easy_setopt(curl,CURLOPT_CAINFO,"app0:ca/cacert.pem");
+    if(vt_tls_configure(curl)!=CURLE_OK){http_free(curl);return -1;}
     curl_easy_setopt(curl,CURLOPT_FOLLOWLOCATION,0L);
     curl_easy_setopt(curl,CURLOPT_CONNECTTIMEOUT,5L);
     curl_easy_setopt(curl,CURLOPT_TIMEOUT,8L);
