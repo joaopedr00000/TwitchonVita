@@ -43,5 +43,14 @@ int main(void){
     assert(twitch_parse_clip_source("{\"data\":{\"clip\":{\"video\":{\"id\":\"123\"},\"videoOffsetSeconds\":0}}}",id,sizeof(id),&offset)==0);
     assert(!strcmp(id,"123")&&offset==0);
     assert(twitch_parse_clip_source("{\"data\":{\"clip\":{\"video\":null,\"videoOffsetSeconds\":null}}}",id,sizeof(id),&offset)<0);
+    char vodurl[512];
+    assert(twitch_build_vod_url("123","%7Btoken%7D","abcd",42,vodurl,sizeof(vodurl))==0);
+    assert(strstr(vodurl,"/vod/v2/123.m3u8?")&&strstr(vodurl,"&nauth=%7Btoken%7D")&&strstr(vodurl,"&nauthsig=abcd"));
+    assert(!strstr(vodurl,"&token=")&&!strstr(vodurl,"&sig="));
+    assert(twitch_build_vod_url("bad/path","t","s",42,vodurl,sizeof(vodurl))<0);
+    assert(twitch_build_vod_url("123","t","s",42,vodurl,5)<0);
+    assert(!strcmp(twitch_vod_rejection("[{\"type\":\"error\",\"error\":\"Invalid signature\"}]"),"SIGNATURE"));
+    assert(!strcmp(twitch_vod_rejection("{\"message\":\"Subscribers only\"}"),"SUBSCRIPTION"));
+    assert(!strcmp(twitch_vod_rejection("not JSON"),"UNKNOWN"));
     return 0;
 }

@@ -61,6 +61,31 @@ int twitch_channel_url(const char *login, char *out, size_t cap)
     return n>=0 && (size_t)n<cap?0:-1;
 }
 
+/* VOD and live Usher endpoints use different names for the signed token.
+ * Arguments are URL-escaped by the caller. Never log this complete URL. */
+int twitch_build_vod_url(const char *id,const char *token,const char *sig,unsigned nonce,char *out,size_t cap){
+    if(!id||!*id||strlen(id)>31||strspn(id,"0123456789")!=strlen(id)||!token||!*token||!sig||!*sig||!out||!cap)return -1;
+    int n=snprintf(out,cap,"https://usher.ttvnw.net/vod/v2/%s.m3u8?platform=web&p=%u&allow_source=true&allow_audio_only=false&playlist_include_framerate=true&multigroup_video=true&supported_codecs=h264&nauth=%s&nauthsig=%s",id,nonce%1000000,token,sig);
+    return n>0&&(size_t)n<cap?0:-1;
+}
+/* Classify error responses rather than logging arbitrary server text or tokens. */
+const char *twitch_vod_rejection(const char *body){
+    json_t *r=body?json_parse(body):NULL;
+    const char *e=json_str(r,"0.error","");
+    if(!*e)e=json_str(r,"error","");
+    if(!*e)e=json_str(r,"message","");
+    char lower[256];size_t i=0;
+    for(;e[i]&&i+1<sizeof(lower);i++)lower[i]=(char)tolower((unsigned char)e[i]);
+    lower[i]=0;
+    const char *why=strstr(lower,"subscriber")||strstr(lower,"subscription")?"SUBSCRIPTION":
+        strstr(lower,"geo")||strstr(lower,"region")?"REGION":
+        strstr(lower,"expired")?"EXPIRED":
+        strstr(lower,"signature")?"SIGNATURE":
+        strstr(lower,"token")||strstr(lower,"nauth")?"TOKEN":
+        strstr(lower,"not found")||strstr(lower,"unavailable")?"UNAVAILABLE":
+        strstr(lower,"forbidden")||strstr(lower,"denied")?"DENIED":"UNKNOWN";
+    json_free(r);return why;
+}
 int twitch_parse_clip_source(const char *json,char *vod,size_t cap,int *offset){
     if(!json||!vod||!cap||!offset)return -1;
     json_t *root=json_parse(json);
@@ -1084,10 +1109,19 @@ int twitch_vod_variants(const char *id,const char *oauth,m3u8_variant_t *out,int
     const char *token=json_str(root,"data.videoPlaybackAccessToken.value",""),*sig=json_str(root,"data.videoPlaybackAccessToken.signature","");
     char *et=*token?curl_easy_escape(c,token,0):NULL,*es=*sig?curl_easy_escape(c,sig,0):NULL;
     static char url[16384];
-    int len=et&&es?snprintf(url,sizeof(url),"https://usher.ttvnw.net/vod/v2/%s.m3u8?allow_source=true&allow_audio_only=false&supported_codecs=h264&token=%s&sig=%s&player=twitchweb&platform=web&player_backend=mediaplayer&playlist_include_framerate=true",id,et,es):-1;
+    int built=et&&es?twitch_build_vod_url(id,et,es,(unsigned)rand(),url,sizeof(url)):-1;
     curl_free(et);curl_free(es);json_free(root);
-    if(len<0||(size_t)len>=sizeof(url))goto done;
-    net=http_media_get(c,(int)trust,url,&b,&status,abort_flag);if(net<0||status!=200){snprintf(err,errlen,status==403?"VOD access denied (HTTP 403): check account/subscription or availability":"VOD playlist HTTP %ld curl %d",status,-net);goto done;}
+    if(built<0){snprintf(err,errlen,"VOD playback token missing or URL too long");goto done;}
+    net=http_media_get(c,(int)trust,url,&b,&status,abort_flag);
+    if(net<0||status!=200){
+        if(!net&&status==403){
+            const char *reason=twitch_vod_rejection((const char*)b.data);
+            snprintf(err,errlen,"VOD HTTP 403 [%s]",reason);
+            LOGW("vod: Usher rejected signed request, class=%s",reason);
+        }else snprintf(err,errlen,"VOD playlist HTTP %ld curl %d",status,-net);
+        goto done;
+    }
+    LOGI("vod: signed v2 master playlist HTTP 200 bytes=%u",(unsigned)b.size);
     n=m3u8_parse_master((const char*)b.data,out,max);
     if(n<=0)n=-1;
 done:
