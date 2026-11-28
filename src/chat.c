@@ -703,7 +703,6 @@ static void *chat_thread(void *argp)
                     curl_easy_setopt(c,CURLOPT_ERRORBUFFER,tls_error);}
             }
             if(c){
-            }
             curl_easy_setopt(c, CURLOPT_XFERINFOFUNCTION, abort_cb);
             curl_easy_setopt(c, CURLOPT_NOPROGRESS, 0L);
             CURLcode r = curl_easy_perform(c);
