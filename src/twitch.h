@@ -88,12 +88,16 @@ void twitch_sort_by_viewers(twitch_stream_t *s, int n);
 
 typedef struct {int followers;char created[32],bio[512],links[384];} twitch_about_t;
 #define VT_MEDIA_MAX 30
+#define VT_MEDIA_CURSOR 512
+enum { VT_MEDIA_AUTO, VT_MEDIA_HELIX, VT_MEDIA_GQL };
 typedef struct {char id[80],title[192],thumb[192],date[32],broadcaster[32],channel[64],type[16],url[192];int seconds,offset,subscriber_only;char vod_id[32];} twitch_media_t;
 typedef struct {char login[32],oauth[128],user_id[32],vod_id[32],broadcaster[32],title[96],id[80],url[192],error[192];int duration,offset,confirmed;} twitch_clip_job_t;
+int twitch_parse_media_cursor(const char *body,int source,int kind,char *next,size_t cap);
 int twitch_parse_media_restrictions(const char *body,twitch_media_t *out,int n,int *seen);
 #ifndef VT_NO_NET
 #include "buf.h"
 int twitch_fetch_about(const char *login,const char *oauth,twitch_about_t *out,volatile int *abort_flag);
+int twitch_fetch_media_page(const char *login,const char *oauth,int kind,twitch_media_t *out,int max,const char *after,int *source,char *next,size_t next_cap,char *err,size_t errlen,volatile int *abort_flag);
 int twitch_fetch_media(const char *login,const char *oauth,int kind,twitch_media_t *out,int max,char *err,size_t errlen,volatile int *abort_flag);
 int twitch_vod_variants(const char *id,const char *oauth,m3u8_variant_t *out,int max,char *err,size_t errlen,volatile int *abort_flag);
 int twitch_create_clip(void *arg,volatile int *abort_flag);

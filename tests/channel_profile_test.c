@@ -13,6 +13,12 @@ int main(void){
     assert(seen==1&&media[0].subscriber_only&&media[1].subscriber_only&&!media[2].subscriber_only);
     assert(twitch_parse_media_restrictions("{\"errors\":[{\"message\":\"Forbidden\"}]}",media,3,&seen)<0);
     assert(!media[2].subscriber_only&&seen==0);
+    char more[VT_MEDIA_CURSOR];
+    assert(twitch_parse_media_cursor("{\"data\":[],\"pagination\":{\"cursor\":\"abc+/=\"}}",VT_MEDIA_HELIX,0,more,sizeof(more))==0&&!strcmp(more,"abc+/="));
+    assert(twitch_parse_media_cursor("{\"data\":[],\"pagination\":{}}",VT_MEDIA_HELIX,4,more,sizeof(more))==0&&!more[0]);
+    assert(twitch_parse_media_cursor("{\"data\":{\"user\":{\"clips\":{\"edges\":[{\"cursor\":\"first\"},{\"cursor\":\"last\"}],\"pageInfo\":{\"hasNextPage\":true}}}}}",VT_MEDIA_GQL,4,more,sizeof(more))==0&&!strcmp(more,"last"));
+    assert(twitch_parse_media_cursor("{\"data\":{\"user\":{\"videos\":{\"edges\":[],\"pageInfo\":{\"hasNextPage\":true}}}}}",VT_MEDIA_GQL,0,more,sizeof(more))<0&&!more[0]);
+    assert(twitch_parse_media_cursor("{\"data\":[],\"pagination\":{\"cursor\":\"too-long\"}}",VT_MEDIA_HELIX,0,more,3)<0&&!more[0]);
     char url[96],bio[32];
     assert(twitch_channel_url("gaules",url,sizeof(url))==0);
     assert(!strcmp(url,"https://www.twitch.tv/gaules"));

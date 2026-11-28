@@ -171,6 +171,33 @@ int twitch_video_subscriber_type(const char *type){
 /* Read only explicit restriction metadata; missing fields and unrelated
  * GraphQL errors are not evidence of a subscription. Keep positive results
  * across independent current/legacy queries, verifying each returned video ID. */
+/* Pagination is provider-specific. Never invent a cursor from an item ID. */
+int twitch_parse_media_cursor(const char *body,int source,int kind,char *next,size_t cap){
+    if(!next||!cap)return -1;
+    next[0]=0;
+    json_t *root=body?json_parse(body):NULL;
+    const char *cur="";
+    int rc=0;
+    if(source==VT_MEDIA_HELIX){
+        json_t *a=json_get(root,"data");
+        if(!a||a->type!=JSON_ARRAY)rc=-1;
+        else cur=json_str(root,"pagination.cursor","");
+    }else if(source==VT_MEDIA_GQL){
+        json_t *connection=json_path(root,kind==4?"data.user.clips":"data.user.videos");
+        json_t *edges=json_get(connection,"edges");
+        if(!edges||edges->type!=JSON_ARRAY||json_get(root,"errors"))rc=-1;
+        else if(json_num(connection,"pageInfo.hasNextPage",0)){
+            json_t *last=edges->child;
+            if(last){while(last->next)last=last->next;cur=json_str(last,"cursor","");}
+            if(!*cur)rc=-1;
+        }
+    }else rc=-1;
+    if(rc==0&&*cur){
+        if(strlen(cur)>=cap||strpbrk(cur,"\r\n"))rc=-1;
+        else snprintf(next,cap,"%s",cur);
+    }
+    json_free(root);return rc;
+}
 int twitch_parse_media_restrictions(const char *body,twitch_media_t *out,int n,int *seen){
     if(seen)*seen=0;
     if(!body||!out||n<0||n>VT_MEDIA_MAX)return -1;
@@ -1111,18 +1138,24 @@ static int clip_id_ok(const char *s){return s&&*s&&strlen(s)<80&&strspn(s,"abcde
 /* Public channel catalogs do not depend on the account token. This is
  * a read-only compatibility request, with TLS verification and no redirect.
  * No account credentials or integrity-challenge workarounds are used. */
-static int media_public_gql(const char *login,int kind,twitch_media_t *out,int max,long *status,int *net,volatile int *abort_flag){
-    char check[96],body[1024];
+static int media_public_gql(const char *login,int kind,twitch_media_t *out,int max,const char *after,char *next_cursor,size_t next_cap,long *status,int *net,volatile int *abort_flag){
+    char check[96],body[4096];
     *status=0;*net=0;
     if(twitch_channel_url(login,check,sizeof(check))<0||max<=0)return -1;
     if(max>VT_MEDIA_MAX)max=VT_MEDIA_MAX;
     const char *types[]={"","ARCHIVE","HIGHLIGHT","UPLOAD"};
-    if(kind==4)
-        snprintf(body,sizeof(body),"{\"query\":\"query { user(login: \\\"%s\\\") { id clips(first: %d, criteria: {period: ALL_TIME, sort: VIEWS_DESC}) { edges { node { slug title createdAt durationSeconds url thumbnailURL } } } } }\"}",login,max);
-    else{
-        char filter[64]="";if(kind>=1&&kind<=3)snprintf(filter,sizeof(filter),", type: %s",types[kind]);
-        snprintf(body,sizeof(body),"{\"query\":\"query { user(login: \\\"%s\\\") { id videos(first: %d%s, sort: TIME) { edges { node { id title createdAt lengthSeconds broadcastType previewThumbnailURL(width:160,height:90) } } } } }\"}",login,max,filter);
-    }
+    char escaped[VT_MEDIA_CURSOR*2+1],filter[64]="";
+    if(kind>=1&&kind<=3)snprintf(filter,sizeof(filter),", type: %s",types[kind]);
+    int paging=next_cursor!=NULL, written;
+    if(twitch_json_escape(after?after:"",escaped,sizeof(escaped))<0)return -1;
+    const char *fields=kind==4?"slug title createdAt durationSeconds url thumbnailURL":"id title createdAt lengthSeconds broadcastType previewThumbnailURL(width:160,height:90)";
+    const char *connection=kind==4?"clips":"videos";
+    const char *sort=kind==4?", criteria: {period: ALL_TIME, sort: VIEWS_DESC}":", sort: TIME";
+    if(paging)
+        written=snprintf(body,sizeof(body),"{\"query\":\"query M($after: Cursor) { user(login: \\\"%s\\\") { id %s(first: %d, after: $after%s%s) { edges { cursor node { %s } } pageInfo { hasNextPage } } } }\",\"variables\":{\"after\":%s%s%s}}",login,connection,max,filter,sort,fields,after&&*after?"\"":"",after&&*after?escaped:"null",after&&*after?"\"":"");
+    else
+        written=snprintf(body,sizeof(body),"{\"query\":\"query { user(login: \\\"%s\\\") { id %s(first: %d%s%s) { edges { node { %s } } } } }\"}",login,connection,max,filter,sort,fields);
+    if(written<0||(size_t)written>=sizeof(body))return -1;
     CURL *c=http_new();if(!c){*net=-CURLE_FAILED_INIT;return -1;}
     CURLcode trust=vt_tls_configure(c);
     curl_easy_setopt(c,CURLOPT_FOLLOWLOCATION,0L);
@@ -1147,6 +1180,7 @@ static int media_public_gql(const char *login,int kind,twitch_media_t *out,int m
         const char *id=json_str(root,"data.user.id","");
         json_t *edges=json_path(root,kind==4?"data.user.clips.edges":"data.user.videos.edges");
         if(numeric_id(id)&&edges&&edges->type==JSON_ARRAY&&!json_get(root,"errors")){
+            if(next_cursor&&twitch_parse_media_cursor((const char*)b.data,VT_MEDIA_GQL,kind,next_cursor,next_cap)<0)next_cursor[0]=0;
             n=0;for(json_t *e=edges->child;e&&n<max;e=e->next){
                 json_t *j=json_get(e,"node");const char *mid=json_str(j,kind==4?"slug":"id","");
                 if(kind==4?!clip_id_ok(mid):!numeric_id(mid))continue;
@@ -1210,18 +1244,27 @@ static void media_restrictions(twitch_media_t *out,int n,volatile int *abort_fla
     }
     curl_slist_free_all(h);http_free(c);
 }
-int twitch_fetch_media(const char *login,const char *oauth,int kind,twitch_media_t *out,int max,char *err,size_t errlen,volatile int *abort_flag){
-    char id[32],url[256];buf_t b={0};long status=0;int n=-1,net=0;
-    if(!out||max<=0)return -1;
-    if(!oauth||!*oauth)goto public_catalog;
+int twitch_fetch_media_page(const char *login,const char *oauth,int kind,twitch_media_t *out,int max,const char *after,int *source,char *next,size_t next_cap,char *err,size_t errlen,volatile int *abort_flag){
+    char id[32],url[2048];buf_t b={0};long status=0;int n=-1,net=0;
+    int more=after&&*after;
+    if(next&&next_cap)next[0]=0;
+    if(!out||max<=0||max>VT_MEDIA_MAX||!source||(next&&!next_cap)||(more&&*source==VT_MEDIA_AUTO))return -1;
+    if(*source==VT_MEDIA_GQL||!oauth||!*oauth){if(more&&*source!=VT_MEDIA_GQL)goto failed;goto public_catalog;}
     if(media_user_id_detail(login,oauth,id,sizeof(id),&status,&net,abort_flag)<0){LOGW("media: account channel lookup HTTP %ld curl=%d",status,net);goto public_catalog;}
     static const char *types[]={"all","archive","highlight","upload"};
-    if(kind==4)snprintf(url,sizeof(url),"https://api.twitch.tv/helix/clips?broadcaster_id=%s&first=30",id);
-    else snprintf(url,sizeof(url),"https://api.twitch.tv/helix/videos?user_id=%s&first=30&type=%s",id,types[kind>=0&&kind<4?kind:0]);
+    if(kind==4)snprintf(url,sizeof(url),"https://api.twitch.tv/helix/clips?broadcaster_id=%s&first=%d",id,max);
+    else snprintf(url,sizeof(url),"https://api.twitch.tv/helix/videos?user_id=%s&first=%d&type=%s",id,max,types[kind>=0&&kind<4?kind:0]);
+    if(more){
+        CURL *c=http_new();if(!c)goto failed;
+        char *esc=curl_easy_escape(c,after,0);size_t used=strlen(url);
+        int k=esc?snprintf(url+used,sizeof(url)-used,"&after=%s",esc):-1;
+        curl_free(esc);http_free(c);if(k<0||(size_t)k>=sizeof(url)-used)goto failed;
+    }
     net=media_request(url,oauth,NULL,&b,&status,abort_flag);
     if(!net&&status==200){
         json_t *root=json_parse((const char*)b.data),*arr=json_get(root,"data");
         if(arr&&arr->type==JSON_ARRAY){
+            if(next&&twitch_parse_media_cursor((const char*)b.data,VT_MEDIA_HELIX,kind,next,next_cap)<0)next[0]=0;
             n=0;for(json_t *j=arr->child;j&&n<max;j=j->next){
                 const char *mid=json_str(j,"id","");
                 if(kind==4?!clip_id_ok(mid):!numeric_id(mid))continue;
@@ -1239,16 +1282,28 @@ int twitch_fetch_media(const char *login,const char *oauth,int kind,twitch_media
         }json_free(root);
     }
     buf_free(&b);LOGI("media: Helix catalog kind=%d HTTP %ld curl=%d count=%d",kind,status,net,n);
-    if(n>=0){if(kind!=4&&n>0)media_restrictions(out,n,abort_flag);return n;}
+    if(n>=0){*source=VT_MEDIA_HELIX;if(kind!=4&&n>0)media_restrictions(out,n,abort_flag);return n;}
 public_catalog:
     if(abort_flag&&*abort_flag)return -1;
+    if(more&&*source!=VT_MEDIA_GQL)goto failed;
     long public_status=0;int public_net=0;
-    n=media_public_gql(login,kind,out,max,&public_status,&public_net,abort_flag);
-    if(n>=0){if(kind!=4&&n>0)media_restrictions(out,n,abort_flag);return n;}
+    n=media_public_gql(login,kind,out,max,after,next,next_cap,&public_status,&public_net,abort_flag);
+    /* Preserve compatibility for the initial catalog if a public schema no longer exposes cursors. */
+    if(n<0&&!more&&next&&!(abort_flag&&*abort_flag)){
+        next[0]=0;n=media_public_gql(login,kind,out,max,NULL,NULL,0,&public_status,&public_net,abort_flag);
+    }
+    if(n>=0){*source=VT_MEDIA_GQL;if(kind!=4&&n>0)media_restrictions(out,n,abort_flag);return n;}
     if(status==401)snprintf(err,errlen,"Twitch recusou a sessao na API (401); catalogo publico indisponivel. / API session rejected; public catalog unavailable.");
     else if(net<0||public_net<0)snprintf(err,errlen,"Falha de rede/TLS / Network/TLS error (curl %d/%d)",-net,-public_net);
     else snprintf(err,errlen,"Catalogo indisponivel / Catalog unavailable (HTTP %ld/%ld)",status,public_status);
     return -1;
+failed:
+    snprintf(err,errlen,vt_lang_current()==2?"Não foi possível carregar mais itens. Tente novamente.":"Could not load more items. Try again.");
+    return -1;
+}
+int twitch_fetch_media(const char *login,const char *oauth,int kind,twitch_media_t *out,int max,char *err,size_t errlen,volatile int *abort_flag){
+    int source=VT_MEDIA_AUTO;
+    return twitch_fetch_media_page(login,oauth,kind,out,max,NULL,&source,NULL,0,err,errlen,abort_flag);
 }
 int twitch_vod_variants(const char *id,const char *oauth,m3u8_variant_t *out,int max,char *err,size_t errlen,volatile int *abort_flag){
     if(!numeric_id(id))return -1;
