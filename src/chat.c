@@ -711,8 +711,8 @@ static void *chat_thread(void *argp)
         set_status(vt_msg("Conectando al chat..."));
         CURL *c = curl_easy_init();
         int ok = 0;char failure[24]="CONNECT";
+        char tls_error[CURL_ERROR_SIZE]={0};
         if (c) {
-            char tls_error[CURL_ERROR_SIZE]={0};
             curl_easy_setopt(c, CURLOPT_URL, "https://irc.chat.twitch.tv:6697");
             curl_easy_setopt(c, CURLOPT_CONNECT_ONLY, 1L);
             curl_easy_setopt(c, CURLOPT_CONNECTTIMEOUT, 10L);
