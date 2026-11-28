@@ -45,7 +45,7 @@ int _newlib_heap_size_user = 96 * 1024 * 1024;
 #define SETTINGS_FILE DATA_DIR "/settings.txt"
 #define LOG_FILE      DATA_DIR "/log.txt"
 #define LOG_PREV_FILE DATA_DIR "/log_prev.txt"
-#define APP_VERSION   "1.34-recordings-test11"
+#define APP_VERSION   "1.34-recordings-test12"
 
 #define MAX_ITEMS 100
 
@@ -1774,6 +1774,7 @@ static void recordings_screen(const twitch_stream_t *channel){
         while(!reload){
             ui_input_poll(&g_in);unsigned b=g_in.pressed;
             if(b&(g_btn_back|SCE_CTRL_SELECT))return;
+            if(b&SCE_CTRL_TRIANGLE){reload=1;break;}
             if(b&(SCE_CTRL_LTRIGGER|SCE_CTRL_RTRIGGER)){kind=channel?(kind+(b&SCE_CTRL_RTRIGGER?1:6))%7:kind==5?6:5;sel=0;break;}
             if(j.n>0){
                 if(b&SCE_CTRL_UP)sel=(sel+j.n-1)%j.n;if(b&SCE_CTRL_DOWN)sel=(sel+1)%j.n;
@@ -1785,7 +1786,7 @@ static void recordings_screen(const twitch_stream_t *channel){
             frame_begin();vita2d_draw_rectangle(0,0,960,544,CLASSIC_BG);
             ui_text_fit(28,34,900,C_WHITE,1.25f,channel?channel->display:vt_lang_current()==2?"Biblioteca de vídeos":"Video library");
             ui_text_fit(28,72,900,C_GREY,.96f,media_kind(kind));
-            if(j.n<0)ui_text_fit(42,145,876,C_GREY,.9f,j.err);
+            if(j.n<0){wrap_text(42,145,876,C_GREY,.92f,j.err,3);ui_text_fit(42,235,876,C_WHITE,.9f,vt_lang_current()==2?"Triângulo: tentar novamente":"Triangle: retry");}
             else if(!j.n)ui_text_fit(42,145,876,C_GREY,.9f,vt_lang_current()==2?"Nenhum vídeo":"No videos");
             int top=sel/5*5;
             for(int k=0;k<5&&top+k<j.n;k++){

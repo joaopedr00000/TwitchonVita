@@ -76,3 +76,7 @@ Account follows are read-only. The profile shows existing Twitch follows and off
 - Separate recorded HLS playback mode, pause, seek by segment, quality restart at current position, and small RAM-only packet queues. No media files are saved to disk. Completed unencrypted HLS playlists only; ordinary MP4 clips are listed but are not playable in this build.
 - Clip creation via official Helix endpoints, using the existing account after reauthorization for the additional scopes. L in live playback opens a duration/confirmation dialog and reconnects afterward; Square in VOD playback opens the clip dialog and resumes afterward. Clip requests are not retried automatically; success is shown only after Get Clips confirms the ID. VOD creation requires broadcaster/editor permission. No clip is created automatically.
 - Experimental only; hardware validation and API compatibility are not yet established.
+
+### Experimental Recordings Test 12
+
+Fix misleading sign-in error when Helix channel lookup fails. Public video/clip catalog has a read-only anonymous GraphQL fallback with verified TLS, without sending account credentials. Distinguish HTTP rejection from transport/TLS and catalog errors; Triangle retries. No logout or token changes. Fix Helix percent-prefixed thumbnail placeholders. GraphQL availability remains experimental.
