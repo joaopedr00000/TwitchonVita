@@ -2,7 +2,7 @@
 
 Unofficial Twitch live-stream client for PS Vita, based on [VitaTwitch by Dexlei](https://github.com/Dexlei/VitaTwitch). MIT license. This fork is not affiliated with Twitch or Sony.
 
-**[Download Twitch 1.33](https://github.com/joaopedr00000/TwitchonVita/releases/tag/v1.33-classic)**
+**[Download Twitch 1.33](https://github.com/joaopedr00000/TwitchonVita/releases/latest)**
 
 ## Requirements / Requisitos
 
