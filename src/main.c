@@ -535,10 +535,10 @@ static void draw_footer(void)
     vita2d_draw_rectangle(0,FOOTER_Y,SCREEN_W,1,C_PANEL2);
     const char *ok=g_side_focus>=0?side_label(g_side_focus):
         g_tab==TAB_SEARCH&&tb->sel<0?vt_tr(VT_I_SEARCH):vt_tr(VT_I_PLAY);
-    const char *btns[]={g_ok_name,"△","□","L/R","SELECT","START"};
-    const char *labels[]={ok,vt_tr(VT_I_REFRESH),vt_msg("Ir al canal exacto"),vt_tr(VT_I_TAB),vt_tr(VT_I_MENU),vt_tr(VT_I_EXIT)};
-    int count=g_tab==TAB_SEARCH?6:5,cell=(SCREEN_W-24)/count,pos=0;
-    for(int i=0;i<6;i++){if(i==2&&g_tab!=TAB_SEARCH)continue;footer_hint(12+pos++*cell,cell,FOOTER_Y+25,btns[i],labels[i]);}
+    const char *btns[]={g_ok_name,"△","□","L/R","SELECT"};
+    const char *labels[]={ok,vt_tr(VT_I_REFRESH),vt_msg("Ir al canal exacto"),vt_tr(VT_I_TAB),vt_tr(VT_I_MENU)};
+    int count=g_tab==TAB_SEARCH?5:4,cell=(SCREEN_W-24)/count,pos=0;
+    for(int i=0;i<5;i++){if(i==2&&g_tab!=TAB_SEARCH)continue;footer_hint(12+pos++*cell,cell,FOOTER_Y+25,btns[i],labels[i]);}
 }
 
 static void draw_center_msg(const char *title, const char *msg, int top)
@@ -1566,8 +1566,7 @@ int main(void)
         tab_t *tb = &g_tabs[g_tab];
         unsigned p = g_in.pressed;
 
-        if (p & SCE_CTRL_START)
-            break;
+        /* START no longer exits the application from the home screen. */
         if (p & (SCE_CTRL_LTRIGGER | SCE_CTRL_RTRIGGER)) {
             g_game_filter[0]=0;
             home_switch((g_tab+(p&SCE_CTRL_RTRIGGER?1:TAB_COUNT-1))%TAB_COUNT);

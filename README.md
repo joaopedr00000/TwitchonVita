@@ -47,7 +47,7 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j4
 ```
 
-The original decoder architecture is preserved. The custom LiveArea files are versioned with the source. GitHub Actions runs automated regression tests and validates the VPK. The 1.33 release includes a logo-only sidebar header revision, built from the hardware-approved code with no playback or chat changes. See `RELEASE-1.33.md` and the release checksum.
+The original decoder architecture is preserved. The custom LiveArea files are versioned with the source. GitHub Actions runs automated regression tests and validates the VPK. The 1.33 release includes a logo-only sidebar header revision and removes the START shortcut for closing the app, built from the hardware-approved code with no playback or chat changes. Use the PS system button to leave the app. See `RELEASE-1.33.md` and the release checksum.
 
 ## Diagnostics
 

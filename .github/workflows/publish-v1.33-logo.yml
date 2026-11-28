@@ -123,7 +123,10 @@ jobs:
           source=pathlib.Path('src/main.c').read_text()
           header=source.split('static void draw_header(void)')[1].split('int active=side_active();')[0]
           assert '"Twitch"' not in header and '"TwitchonVita"' not in header
-          print('PASS VPK, version 01.33, exact approved artwork and logo-only source')
+          footer=source.split('static void draw_footer(void)')[1].split('static void draw_center_msg')[0]
+          assert '"START"' not in footer and 'VT_I_EXIT' not in footer
+          assert 'if (p & SCE_CTRL_START)\n            break;' not in source
+          print('PASS VPK, version 01.33, exact approved artwork, logo-only header and no START app exit')
           PY
           cp build-ci/VitaTwitch.vpk Twitch-1.33.vpk
           sha256sum Twitch-1.33.vpk > SHA256SUMS-release.txt
@@ -148,7 +151,10 @@ jobs:
           TAG=v1.33-classic
           OLD=3c08bbaaa3d95905a1af2161b614b0af0945c800
           current="$(gh api "repos/$GH_REPO/git/ref/tags/$TAG" --jq .object.sha)"
-          test "$current" = "$OLD"
+          case "$current" in
+            "$OLD"|1dd7d560b49e819df373df1bb66b96b05219430e) ;;
+            *) echo "Unexpected release tag target; refusing to overwrite"; exit 1 ;;
+          esac
           gh release view "$TAG" --repo "$GH_REPO" --json isDraft,isPrerelease --jq '.isDraft == false and .isPrerelease == false' | grep -qx true
           gh release upload "$TAG" Twitch-1.33.vpk SHA256SUMS-release.txt --repo "$GH_REPO" --clobber
           actual="$(sha256sum Twitch-1.33.vpk | cut -d ' ' -f 1)"
