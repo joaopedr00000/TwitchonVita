@@ -807,6 +807,13 @@ static void draw_view(const vslot_t *frame, view_t *vw)
         chat_view_update(CHAT_PANEL_W, SCREEN_H, vw->pp->font, vw->pp->channel);
     vita2d_start_drawing();
     vita2d_clear_screen();
+    if(!frame&&vw->pp->loading_backdrop){
+        vw->pp->loading_backdrop();
+        vita2d_draw_rectangle(0,0,SCREEN_W,SCREEN_H,C_SCRIM);
+        ui_spinner(SCREEN_W/2,SCREEN_H/2-24,16,C_PURPLE);
+        ui_text_center(SCREEN_W/2,SCREEN_H/2+20,C_WHITE,1.0f,vt_tr(VT_I_LOADING));
+        vita2d_end_drawing();vita2d_swap_buffers();vita2d_wait_rendering_done();return;
+    }
 
     if (frame && frame->w > 0 && frame->h > 0) {
         /* visible size: playlist resolution if it fits, else decoder output size */
@@ -1031,7 +1038,7 @@ int player_run(const player_params_t *pp, char *err, int errlen)
     memset(pl, 0, sizeof(*pl));
     memset(&view, 0, sizeof(view));
     view.pp = pp;
-    view.osd = 1;view.recording_pos=pp->start_seconds;view.recording_duration=pp->duration_seconds;
+    view.osd = 1;view.recording_pos=pp->start_seconds-pp->timeline_offset;view.recording_duration=pp->duration_seconds;
     pl->profile=pp->profile;
     pl->volume=pp->volume?*pp->volume:100;
     view.cpu_mhz=vt_profile_clock(pp->profile,pp->height,pp->fps);
@@ -1074,7 +1081,7 @@ int player_run(const player_params_t *pp, char *err, int errlen)
         goto out_queues;
     }
     LOGI("startup: start HLS thread");
-    int hls_rc=pp->preview_playlist?hls_start_preview(&pl->hls,pp->preview_playlist,&pl->vq,&pl->aq,pp->start_seconds):pp->recorded==2?hls_start_clip(&pl->hls,pp->url,&pl->vq,&pl->aq,pp->duration_seconds):pp->recorded?hls_start_recorded(&pl->hls,pp->url,&pl->vq,&pl->aq,pp->start_seconds):hls_start_capture(&pl->hls,pp->url,&pl->vq,&pl->aq,vt_profile_edge(pp->profile),pp->login,pp->chat_oauth,pp->width,pp->height,pp->fps,pp->ad_backup_url,pp->live_capture);
+    int hls_rc=pp->preview_playlist?hls_start_preview(&pl->hls,pp->preview_playlist,&pl->vq,&pl->aq,pp->start_seconds):pp->recorded==2?hls_start_clip(&pl->hls,pp->url,&pl->vq,&pl->aq,pp->duration_seconds,pp->start_seconds):pp->recorded?hls_start_recorded(&pl->hls,pp->url,&pl->vq,&pl->aq,pp->start_seconds):hls_start_capture(&pl->hls,pp->url,&pl->vq,&pl->aq,vt_profile_edge(pp->profile),pp->login,pp->chat_oauth,pp->width,pp->height,pp->fps,pp->ad_backup_url,pp->live_capture);
     if(hls_rc<0){
         snprintf(err, (size_t)errlen, vt_msg("No se pudo crear el hilo de descarga"));
         LOGE("%s", err);
@@ -1230,12 +1237,12 @@ int player_run(const player_params_t *pp, char *err, int errlen)
                     last_draw=0;
                 }
                 if(pressed&(pp->media_navigation?SCE_CTRL_SELECT:SCE_CTRL_TRIANGLE)){view.osd=!view.osd;last_draw=0;}
-                if(!should_exit&&!view.quality_menu&&!pp->preview_end&&(pressed&SCE_CTRL_SQUARE)){ret=PLAYER_CREATE_CLIP;should_exit=1;}
+                if(!should_exit&&!view.quality_menu&&!pp->preview_end&&pp->recorded==1&&(pressed&SCE_CTRL_SQUARE)){ret=PLAYER_CREATE_CLIP;should_exit=1;}
                 if(!should_exit&&!view.quality_menu&&pp->media_navigation){
                     if((pressed&SCE_CTRL_LTRIGGER)&&pp->can_previous){ret=PLAYER_PREVIOUS_MEDIA;should_exit=1;}
                     else if((pressed&SCE_CTRL_RTRIGGER)&&pp->can_next){ret=PLAYER_NEXT_MEDIA;should_exit=1;}
                 }
-                if(!should_exit&&!view.quality_menu&&!pp->preview_end&&pp->seek_requested&&view.recording_duration>0){
+                if(!should_exit&&!view.quality_menu&&(!pp->preview_end||pp->media_navigation)&&pp->seek_requested&&view.recording_duration>0){
                     int duration=view.recording_duration;
                     int delta=0;
                     if(new_buttons&SCE_CTRL_UP)delta=30;
@@ -1369,7 +1376,10 @@ int player_run(const player_params_t *pp, char *err, int errlen)
             if(task_start(&viewer_task,viewer_fetch,&viewer_job)==0)view.viewers_busy=1;
             last_draw=0;
         }
-        if (!pp->recorded&&osd_until && now_us >= osd_until) {
+        if(pp->recorded&&(pressed||input.touch_tap)){
+            osd_until=view.osd?now_us+5000000ULL:0;
+        }
+        if (osd_until && now_us >= osd_until && !view.quality_menu) {
             view.osd = 0;
             osd_until = 0;
             last_draw = 0;
@@ -1506,11 +1516,11 @@ int player_run(const player_params_t *pp, char *err, int errlen)
         }
 
         if(pp->recorded&&pl->hls.position_ready){
-            view.recording_duration=pl->hls.duration_seconds;
+            view.recording_duration=(pp->timeline_offset||(pp->media_navigation&&pp->preview_end))?pp->duration_seconds:pl->hls.duration_seconds;
             if(next>=0&&vp->slot[next].pts!=TS_NOPTS){
                 if(recording_base==TS_NOPTS)recording_base=vp->slot[next].pts;
                 int64_t delta=vp->slot[next].pts-recording_base;
-                if(delta>=0){view.recording_pos=pl->hls.actual_start+(int)(delta/90000);if(view.recording_pos>view.recording_duration)view.recording_pos=view.recording_duration;}
+                if(delta>=0){view.recording_pos=pl->hls.actual_start+(int)(delta/90000)-pp->timeline_offset;if(view.recording_pos<0)view.recording_pos=0;if(view.recording_pos>view.recording_duration)view.recording_pos=view.recording_duration;}
                 if(pp->position_seconds)*pp->position_seconds=view.recording_pos;
             }
         }
@@ -1532,6 +1542,7 @@ int player_run(const player_params_t *pp, char *err, int errlen)
                      (unsigned long long)(t_end - start_us) / 1000ULL);
                 LOGI("video: display %dx%d, filter linear, selected %s",view.display_w,view.display_h,pp->quality);
                 first_logged = 1;
+                if(pp->recorded&&view.osd)osd_until=t_end+5000000ULL;
             }
             if (last_present && t_draw - last_present > max_present_gap)
                 max_present_gap = t_draw - last_present;

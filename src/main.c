@@ -45,7 +45,7 @@ int _newlib_heap_size_user = 96 * 1024 * 1024;
 #define SETTINGS_FILE DATA_DIR "/settings.txt"
 #define LOG_FILE      DATA_DIR "/log.txt"
 #define LOG_PREV_FILE DATA_DIR "/log_prev.txt"
-#define APP_VERSION   "1.34-media-playback-test25"
+#define APP_VERSION   "1.34-media-playback-test26"
 
 #define MAX_ITEMS 100
 
@@ -269,7 +269,7 @@ static void settings_load(void)
         if (!strncmp(line, "quality=", 8))
             snprintf(g_pref_quality, sizeof(g_pref_quality), "%s", line + 8);
         else if (!strncmp(line, "search=", 7))
-            snprintf(g_search, sizeof(g_search), "%s", line + 7);
+            g_search[0]=0;
         else if (!strncmp(line, "chat=", 5))
             g_chat_on = atoi(line + 5) != 0;
         else if (!strncmp(line, "lang=", 5))
@@ -297,7 +297,7 @@ static void settings_save(void)
     if (!f)
         return;
     fprintf(f, "quality=%s\nsearch=%s\nchat=%d\nlang=%s\ntouch=%d\n",
-            g_pref_quality, g_search, g_chat_on,
+            g_pref_quality, "", g_chat_on,
             vt_lang_code(vt_lang_current()), ui_touch_enabled());
     fprintf(f,"profile=%d\nauto_quality=%d\ndiag=%d\nvolume=%d\nremember=%d\n",g_profile,g_auto_quality,g_diag,g_volume,g_remember);
     fprintf(f,"region=%s\nquality_flow=3\ntv_layout=%d\nfollowing_filter=%d\n",region_codes[g_region],g_tv_layout,g_follow_offline);
@@ -394,6 +394,7 @@ static void tabs_update(void)
             if(following_dirty)tab_load(t);
             continue;
         }
+        if(t==TAB_SEARCH&&strcmp(tb->job.query,g_search)){tb->state=LS_EMPTY;tb->count=0;if(g_search[0])tab_load(t);continue;}
         if(t==TAB_EXPLORE){char expected[256];explore_query(expected,sizeof(expected));if(strcmp(tb->job.query,expected)){tb->state=LS_EMPTY;tb->count=0;tab_load(t);continue;}}
         if (tb->job.n >= 0)
             LOGI("%s: %d canales", tab_name(t), tb->job.n);
@@ -819,9 +820,9 @@ static void draw_footer(void)
     const char *ok=g_side_focus>=0?side_label(g_side_focus):
         g_tab==TAB_SEARCH&&tb->sel<0?vt_tr(VT_I_SEARCH):vt_tr(VT_I_PLAY);
     const char *btns[]={g_ok_name,"△","□","L/R","SELECT","START"};
-    const char *labels[]={ok,vt_tr(VT_I_REFRESH),(g_tab==TAB_FOLLOWED?following_mode():vt_msg("Ir al canal exacto")),vt_tr(VT_I_TAB),vt_tr(VT_I_MENU),profile_label(0)};
-    int count=g_tab!=TAB_EXPLORE?6:5,cell=(SCREEN_W-24)/count,pos=0;
-    for(int i=0;i<6;i++){if(i==2&&g_tab==TAB_EXPLORE)continue;footer_hint(12+pos++*cell,cell,FOOTER_Y+25,btns[i],labels[i]);}
+    const char *labels[]={ok,vt_tr(VT_I_REFRESH),games_label(),vt_tr(VT_I_TAB),vt_tr(VT_I_MENU),profile_label(0)};
+    int count=6,cell=(SCREEN_W-24)/count,pos=0;
+    for(int i=0;i<6;i++){footer_hint(12+pos++*cell,cell,FOOTER_Y+25,btns[i],labels[i]);}
 }
 
 static void draw_center_msg(const char *title, const char *msg, int top)
@@ -849,7 +850,7 @@ _Static_assert(TV_ROW_STEP-TV_SECTION_BASELINE-TV_NAME_BASELINE>=22, "TV section
 _Static_assert(TV_ROW_TOP+TV_ROW_STEP+TV_TILE_HIT_H<=FOOTER_Y, "TV rows fit above footer");
 static int tv_row_top(void){return !g_tv_home&&g_tab==TAB_SEARCH?TV_SEARCH_ROW_TOP:TV_ROW_TOP;}
 static const char *tv_nav_label(int i){
-    switch(i){case 0:return vt_lang_current()==2?"Início":vt_lang_current()==1?"Inicio":"Home";case 1:return vt_tr(VT_I_FOLLOWING);case 2:return channels_label();case 3:return games_label();case 4:return vt_tr(VT_I_SEARCH);case 5:return profile_label(0);default:return vt_tr(VT_I_SETTINGS);}
+    switch(i){case 0:return vt_lang_current()==2?"Início":vt_lang_current()==1?"Inicio":"Home";case 1:return vt_tr(VT_I_FOLLOWING);case 2:return channels_label();case 3:return vt_lang_current()==2?"Biblioteca":vt_lang_current()==1?"Biblioteca":"Library";case 4:return vt_tr(VT_I_SEARCH);case 5:return profile_label(0);default:return vt_tr(VT_I_SETTINGS);}
 }
 static void tv_tile(const twitch_stream_t *s,int x,int y,int active){
     const int w=TV_TILE_W,h=TV_TILE_H;
@@ -864,7 +865,7 @@ static void tv_tile(const twitch_stream_t *s,int x,int y,int active){
 static void tv_row(int tab,int y,const char *label){
     tab_t *tb=&g_tabs[tab];int n=home_count(tb),pos=home_pos(tb);
     /* Following and top rows use their own selection; category filter applies only to Explore. */
-    int grid=!g_tv_home&&tab==TAB_EXPLORE&&!g_game_id[0]&&!g_game_filter[0];
+    int grid=!g_tv_home&&(tab==TAB_FOLLOWED||(tab==TAB_EXPLORE&&!g_game_id[0]&&!g_game_filter[0]));
     int slots=grid?8:4;
     int first=pos>=0?(pos/slots)*slots:0;
     ui_text_fit(20,y-TV_SECTION_BASELINE,800,C_WHITE,.98f,label);
@@ -913,13 +914,15 @@ static void draw_tv_home(void){
         tv_row(TAB_EXPLORE,tv_row_top()+TV_ROW_STEP,vt_lang_current()==2?"Canais ao vivo populares":vt_lang_current()==1?"Canales en directo populares":"Top live channels");
     }else{
         tv_row(g_tab,tv_row_top(),g_tab==TAB_FOLLOWED?following_mode():g_tab==TAB_SEARCH?vt_tr(VT_I_SEARCH):g_game_filter[0]?g_game_filter:channels_label());
-        if(g_tab!=TAB_EXPLORE||g_game_id[0]||g_game_filter[0])ui_text_fit(20,425,920,C_GREY,.9f,vt_lang_current()==2?"Use esquerda/direita para navegar • START para perfil":"Use left/right to browse • START for profile");
+        if(g_tab==TAB_SEARCH||(g_tab==TAB_EXPLORE&&(g_game_id[0]||g_game_filter[0])))ui_text_fit(20,425,920,C_GREY,.9f,vt_lang_current()==2?"Use esquerda/direita para navegar • START para perfil":"Use left/right to browse • START for profile");
     }
     draw_footer();
     if(g_toast[0]&&sceKernelGetProcessTimeWide()<g_toast_until){ui_round_rect(100,218,760,37,5,C_PANEL2);ui_text_fit(116,243,728,C_WHITE,.9f,g_toast);}
 }
+static void (*g_media_backdrop)(void);
 static void draw_home(void)
 {
+    if(g_media_backdrop){g_media_backdrop();return;}
     if(g_tv_layout){draw_tv_home();return;}
     tab_t *tb=&g_tabs[g_tab];
     int top=grid_top(g_tab),n=home_count(tb),pos=home_pos(tb);
@@ -1950,21 +1953,28 @@ static void clip_dialog(const char *login,const twitch_media_t *v,int pos,const 
 }
 typedef struct {char id[80],url[M3U8_URL_MAX],err[192],vod[32];int height,rc,offset;} clip_mp4_job_t;
 static int clip_mp4_job_run(void *arg,volatile int *abort_flag){clip_mp4_job_t *j=arg;j->rc=twitch_clip_mp4(j->id,j->url,sizeof(j->url),&j->height,j->err,sizeof(j->err),j->vod,sizeof(j->vod),&j->offset,abort_flag);return j->rc;}
-static int play_clip_mp4(twitch_media_t *v,char *failure,size_t failure_cap){
+static int play_clip_mp4(twitch_media_t *v,char *failure,size_t failure_cap,int can_previous,int can_next,int *position){
     static clip_mp4_job_t j;memset(&j,0,sizeof(j));j.rc=-1;snprintf(j.id,sizeof(j.id),"%s",v->id);snprintf(j.vod,sizeof(j.vod),"%s",v->vod_id);j.offset=v->offset;
     task_t task={0};if(run_with_spinner(&task,clip_mp4_job_run,&j,"Clip MP4...")<0)return 0;
     if(j.rc<0){snprintf(failure,failure_cap,"%s",j.err);if(j.vod[0]&&j.offset>=0){snprintf(v->vod_id,sizeof(v->vod_id),"%s",j.vod);v->offset=j.offset;}return -1;}
-    player_params_t pp={0};char err[192]="";int pos=0;
-    pp.recorded=2;pp.duration_seconds=v->seconds>0?v->seconds:60;pp.preview_end=pp.duration_seconds+1;pp.position_seconds=&pos;
+    int pos=*position;
+    for(;;){
+    player_params_t pp={0};char err[192]="";int target=pos;
+    pp.recorded=2;pp.media_navigation=1;pp.can_previous=can_previous;pp.can_next=can_next;
+    pp.duration_seconds=v->seconds>0?v->seconds:60;pp.start_seconds=pos;pp.position_seconds=&pos;pp.seek_requested=&target;pp.loading_backdrop=g_media_backdrop;
     pp.url=j.url;pp.channel=v->channel;pp.title=v->title;pp.quality="MP4";pp.height=j.height;pp.width=(j.height*16/9+1)&~1;pp.fps=30;
     pp.font=ui_font;pp.btn_back=g_btn_back;pp.profile=g_profile;pp.volume=&g_volume;
     scePowerSetArmClockFrequency(vt_profile_clock(g_profile,pp.height,pp.fps));int rc=player_run(&pp,err,sizeof(err));scePowerSetArmClockFrequency(333);
+    *position=pos;
+    if(rc==PLAYER_SEEK){pos=target;*position=pos;continue;}
+    if(rc==PLAYER_PREVIOUS_MEDIA||rc==PLAYER_NEXT_MEDIA)return rc;
     if(rc<0||rc==PLAYER_RECONNECT){snprintf(failure,failure_cap,"%s",err[0]?err:"MP4 playback failed");return -1;}return 0;
+    }
 }
-static int recorded_play(const twitch_media_t *v,int can_previous,int can_next){
+static int recorded_play(twitch_media_t *v,int can_previous,int can_next){
     if(!strcmp(v->type,"clip")){
         twitch_media_t resolved=*v;char failure[192]="";v=&resolved;
-        if(play_clip_mp4(&resolved,failure,sizeof(failure))==0)return 0;
+        int clip_pos=0,mp4_rc=play_clip_mp4(&resolved,failure,sizeof(failure),can_previous,can_next,&clip_pos);if(mp4_rc>=0)return mp4_rc;
         if(!v->vod_id[0]||v->offset<0||v->seconds<1||v->offset>604800-v->seconds){char message[256];snprintf(message,sizeof(message),"%s\n%s",failure,vt_lang_current()==2?"Sem gravação de origem disponível.":"No source VOD available.");modal_message("Clip",message);return 0;}
         static vod_job_t clip_job;memset(&clip_job,0,sizeof(clip_job));snprintf(clip_job.id,sizeof(clip_job.id),"%s",v->vod_id);snprintf(clip_job.oauth,sizeof(clip_job.oauth),"%s",g_logged?g_auth.access:"");
         task_t ct={0};if(run_with_spinner(&ct,vod_job_run,&clip_job,vt_lang_current()==2?"Carregando clipe pela gravação...":"Loading clip from source VOD...")<0)return 0;
@@ -1972,12 +1982,25 @@ static int recorded_play(const twitch_media_t *v,int can_previous,int can_next){
         for(int i=0;i<clip_job.n;i++)if(!clip_job.v[i].audio_only&&clip_job.v[i].height>0&&clip_job.v[i].height<=720&&!strncmp(clip_job.v[i].url,"https://",8))options[cn++]=&clip_job.v[i];
         if(!cn){modal_message("Clip",clip_job.err[0]?clip_job.err:"Source VOD unavailable");return 0;}
         int cs=vt_profile_pick(options,cn,g_profile);if(cs<0||cs>=cn)cs=0;
-        twitch_media_t source=*v;snprintf(source.id,sizeof(source.id),"%s",v->vod_id);source.seconds=v->offset+v->seconds;
-        clip_preview(v->channel,&source,options[cs],NULL,v->offset,v->offset+v->seconds);return 0;
+        for(;;){
+            player_params_t pp={0};char err[192]="";int target=clip_pos;
+            m3u8_variant_t *q=options[cs];int requested=cs;
+            pp.recorded=1;pp.media_navigation=1;pp.can_previous=can_previous;pp.can_next=can_next;
+            pp.timeline_offset=v->offset;pp.start_seconds=v->offset+clip_pos;pp.duration_seconds=v->seconds;pp.preview_end=v->seconds;pp.position_seconds=&clip_pos;pp.seek_requested=&target;
+            pp.url=q->url;pp.channel=v->channel;pp.title=v->title;pp.quality=q->name;pp.width=q->width;pp.height=q->height;pp.fps=q->fps;
+            pp.font=ui_font;pp.btn_back=g_btn_back;pp.profile=g_profile;pp.volume=&g_volume;pp.loading_backdrop=g_media_backdrop;
+            pp.variants=options;pp.variant_count=cn;pp.variant_current=cs;pp.variant_requested=&requested;
+            scePowerSetArmClockFrequency(vt_profile_clock(g_profile,pp.height,pp.fps));int rc=player_run(&pp,err,sizeof(err));scePowerSetArmClockFrequency(333);
+            if(rc==PLAYER_SEEK){clip_pos=target;continue;}
+            if(rc==PLAYER_CHANGE_QUALITY&&requested>=0&&requested<cn){cs=requested;continue;}
+            if(rc==PLAYER_PREVIOUS_MEDIA||rc==PLAYER_NEXT_MEDIA)return rc;
+            if(rc<0||rc==PLAYER_RECONNECT)modal_message("Clip",err[0]?err:"Clip playback failed");
+            return 0;
+        }
     }
     static vod_job_t j;memset(&j,0,sizeof(j));snprintf(j.id,sizeof(j.id),"%s",v->id);snprintf(j.oauth,sizeof(j.oauth),"%s",g_logged?g_auth.access:"");
     task_t task={0};if(run_with_spinner(&task,vod_job_run,&j,vt_lang_current()==2?"Carregando gravação...":"Loading recording...")<0)return 0;
-    if(j.n<=0){modal_message("VOD",j.err[0]?j.err:"No compatible quality");return 0;}
+    if(j.n<=0){if(!strcmp(j.err,twitch_vod_access_message("SUBSCRIPTION")))v->subscriber_only=1;modal_message("VOD",j.err[0]?j.err:"No compatible quality");return 0;}
     m3u8_variant_t *variants[M3U8_MAX_VARIANTS];int n=0;
     for(int i=0;i<j.n;i++)if(!j.v[i].audio_only&&j.v[i].height>0&&j.v[i].height<=720&& !strncmp(j.v[i].url,"https://",8))variants[n++]=&j.v[i];
     if(!n){modal_message("VOD","No compatible H.264 quality <= 720p");return 0;}
@@ -1986,7 +2009,7 @@ static int recorded_play(const twitch_media_t *v,int can_previous,int can_next){
     if(pos<0||(v->seconds>0&&pos>=v->seconds-2))pos=0;
     for(;;){
         player_params_t pp={0};m3u8_variant_t *q=variants[sel];char err[192]="";int target=pos,requested=sel;
-        pp.recorded=1;pp.media_navigation=1;pp.can_previous=can_previous;pp.can_next=can_next;pp.start_seconds=pos;pp.duration_seconds=v->seconds;pp.position_seconds=&pos;pp.seek_requested=&target;
+        pp.recorded=1;pp.loading_backdrop=g_media_backdrop;pp.media_navigation=1;pp.can_previous=can_previous;pp.can_next=can_next;pp.start_seconds=pos;pp.duration_seconds=v->seconds;pp.position_seconds=&pos;pp.seek_requested=&target;
         pp.url=q->url;pp.channel=v->channel;pp.title=v->title;pp.quality=q->name;pp.width=q->width;pp.height=q->height;pp.fps=q->fps;
         pp.font=ui_font;pp.btn_back=g_btn_back;pp.profile=g_profile;pp.volume=&g_volume;pp.variants=variants;pp.variant_count=n;pp.variant_current=sel;pp.variant_requested=&requested;
         scePowerSetArmClockFrequency(vt_profile_clock(g_profile,pp.height,pp.fps));
@@ -2031,10 +2054,7 @@ static void recordings_screen_kind(const twitch_stream_t *channel,int initial){
                 if(b&g_btn_ok){
                     for(;;){
                         int prev=sel-1,next=sel+1;
-                        while(prev>=0&&!strcmp(j.out[prev].type,"clip"))prev--;
-                        while(next<j.n&&!strcmp(j.out[next].type,"clip"))next++;
-                        twitch_media_t v=j.out[sel];
-                        int rc=recorded_play(&v,prev>=0,next<j.n);
+                        int rc=recorded_play(&j.out[sel],prev>=0,next<j.n);
                         if(rc==PLAYER_PREVIOUS_MEDIA&&prev>=0){sel=prev;continue;}
                         if(rc==PLAYER_NEXT_MEDIA&&next<j.n){sel=next;continue;}
                         break;
@@ -2164,6 +2184,62 @@ static void profile_media_card(const twitch_media_t *v,int x,int y,int focused){
     ui_text_fit(x+6,y+133,w-12,C_WHITE,.84f,v->title);
     if(focused)ui_frame(x,y,w,h,3,C_PURPLE);
 }
+typedef struct {const twitch_stream_t *s;const about_job_t *details;media_job_t *catalogs;int *state,*cursor;int own,sel,grid_focus,session_focus,session_yes;} profile_backdrop_t;
+static profile_backdrop_t profile_bg;
+static void draw_profile_view(void){
+    const twitch_stream_t *s=profile_bg.s;const about_job_t *details=profile_bg.details;
+    media_job_t *catalogs=profile_bg.catalogs;int *state=profile_bg.state,*cursor=profile_bg.cursor;
+    int own=profile_bg.own,sel=profile_bg.sel,grid_focus=profile_bg.grid_focus,session_focus=profile_bg.session_focus,session_yes=profile_bg.session_yes;
+    int count=own?7:4,step=924/count,ci=sel==1?0:sel==2?1:own&&sel==3?2:own&&sel==4?3:-1;
+vita2d_draw_rectangle(0,0,960,544,CLASSIC_BG);
+        draw_avatar(s->avatar,s->display,25,20,84);
+        ui_text_fit(125,47,810,C_WHITE,1.35f,s->display[0]?s->display:s->login);
+        char at[64];snprintf(at,sizeof(at),"@%s",s->login);ui_text_fit(125,75,810,C_GREY,.95f,at);
+        ui_text_fit(125,103,810,s->live?C_RED:C_GREY,.9f,s->live?vt_tr(VT_I_LIVE):vt_tr(VT_I_OFFLINE));
+        const char *pt[]={"Ao vivo","Vídeos","Clipes","Salvos","Continuar","Sobre","Sessão"};
+        const char *es[]={"En vivo","Vídeos","Clips","Guardados","Continuar","Acerca de","Sesión"};
+        const char *en[]={"Live","Videos","Clips","Saved","Continue","About","Session"};
+        const char **labels=vt_lang_current()==2?pt:vt_lang_current()==1?es:en;
+        for(int i=0;i<count;i++){int x=18+i*step;ui_round_rect(x,138,step-4,44,5,sel==i?C_PURPLE:C_PANEL);ui_text_fit(x+8,167,step-20,C_WHITE,.9f,labels[!own&&i==3?5:i]);}
+        if(sel==(own?5:3)){
+            int ptbr=vt_lang_current()==2;char line[192];
+            ui_text_fit(30,211,900,C_WHITE,1.1f,ptbr?"Sobre o canal":"About the channel");
+            if(details->about.followers>=0)snprintf(line,sizeof(line),"%s: %d",ptbr?"Seguidores":"Followers",details->about.followers);
+            else snprintf(line,sizeof(line),"%s: —",ptbr?"Seguidores":"Followers");
+            ui_text_fit(30,242,440,C_GREY,.94f,line);
+            snprintf(line,sizeof(line),"%s: %.10s",ptbr?"Conta criada":"Joined",details->about.created[0]?details->about.created:"—");
+            ui_text_fit(490,242,440,C_GREY,.94f,line);
+            snprintf(line,sizeof(line),"twitch.tv/%s",s->login);ui_text_fit(30,269,900,C_WHITE,.9f,line);
+            ui_text_fit(30,302,900,C_WHITE,1.0f,ptbr?"Biografia":"Biography");
+            wrap_text(30,327,900,C_GREY,.87f,details->about.bio[0]?details->about.bio:ptbr?"Não disponível.":"Unavailable.",3);
+            ui_text_fit(30,411,900,C_WHITE,1.0f,ptbr?"Links e redes sociais":"Links and social media");
+            wrap_text(30,439,900,C_GREY,.8f,details->about.links[0]?details->about.links:ptbr?"Links não disponibilizados pela Twitch.":"Links unavailable from Twitch.",3);
+        }else if(own&&sel==6){
+            ui_text_center(480,270,C_WHITE,1.25f,session_text(0));
+            for(int i=0;i<2;i++){
+                int xx=180+i*320,selected=(i==0)==session_yes;
+                ui_round_rect(xx,320,280,58,6,selected?CLASSIC_PURPLE:C_PANEL);
+                if(selected&&session_focus)ui_frame(xx,320,280,58,2,C_WHITE);
+                ui_text_center(xx+140,358,C_WHITE,1.05f,session_text(i+1));
+            }
+        }else if(sel==0){ui_text_fit(30,235,900,C_WHITE,1.1f,s->live?s->title:vt_tr(VT_I_OFFLINE));wrap_text(30,285,900,C_GREY,.9f,details->about.bio,4);}
+        else if(ci>=0){
+            media_job_t *j=&catalogs[ci];
+            if(state[ci]==0||state[ci]==1){ui_spinner(480,315,18,C_PURPLE);ui_text_center(480,352,C_WHITE,1.f,vt_tr(VT_I_LOADING));}
+            else if(state[ci]==3){ui_text_fit(30,475,900,C_GREY,.88f,j->err);ui_text_center(480,352,C_WHITE,.95f,vt_lang_current()==2?"X: tentar novamente":"Confirm: retry");}
+            else if(j->n==0)ui_text_center(480,352,C_GREY,1.f,vt_lang_current()==2?(ci?"Nenhum clipe":"Nenhum vídeo"):(ci?"No clips":"No videos"));
+            else{
+                int page=cursor[ci]/8*8;
+                for(int k=0;k<8&&page+k<j->n;k++)profile_media_card(&j->out[page+k],18+(k%4)*232,193+(k/4)*152,grid_focus&&cursor[ci]==page+k);
+                char pages[48];snprintf(pages,sizeof(pages),"%d / %d",page/8+1,(j->n+7)/8);ui_text_fit(810,520,125,C_GREY,.82f,pages);
+            }
+        }else ui_text_fit(30,235,900,C_GREY,1.05f,vt_lang_current()==2?"Confirme para abrir esta seção":"Confirm to open this section");
+        if(own&&sel==6){
+            ui_hint_bounded(25,520,440,g_ok_name,vt_msg("Aceptar"));
+            ui_hint_bounded(500,520,420,g_back_name,vt_tr(VT_I_BACK));
+        }else ui_text_fit(25,520,ci>=0?770:910,C_WHITE,.82f,ci>=0?(vt_lang_current()==2?"Setas: navegar | L/R: páginas | X: abrir | Triângulo: atualizar | O: voltar":"D-pad: navigate | L/R: pages | Confirm: open | Triangle: refresh | Back"):(vt_lang_current()==2?"Esquerda/direita: abas | Confirmar | Voltar":"Left/right: tabs | Confirm | Back"));
+
+}
 static void channel_full_profile(const twitch_stream_t *channel,int own,int return_to_live){
     twitch_stream_t s=*channel;
     about_job_t details={0};details.about.followers=-1;snprintf(details.login,sizeof(details.login),"%s",s.login);
@@ -2171,8 +2247,8 @@ static void channel_full_profile(const twitch_stream_t *channel,int own,int retu
     task_t bt={0};run_with_spinner(&bt,about_run,&details,vt_tr(VT_I_LOADING));
     if(!details.about.bio[0]){profile_job_t bio={0};snprintf(bio.login,sizeof(bio.login),"%s",s.login);task_t t={0};
         run_with_spinner(&t,profile_run,&bio,vt_tr(VT_I_LOADING));snprintf(details.about.bio,sizeof(details.about.bio),"%s",bio.bio);}
-    static media_job_t catalogs[2];memset(catalogs,0,sizeof(catalogs));
-    task_t mt={0};int active=-1,state[2]={0,0},cursor[2]={0,0};
+    static media_job_t catalogs[4];memset(catalogs,0,sizeof(catalogs));media_load();
+    task_t mt={0};int active=-1,state[4]={0,0,0,0},cursor[4]={0,0,0,0};
     int sel=0,armed=0,grid_focus=0,session_focus=0,session_yes=0;const int count=own?7:4,step=924/count;
     for(;;){
         ui_input_poll(&g_in);unsigned b=g_in.pressed;
@@ -2182,19 +2258,24 @@ static void channel_full_profile(const twitch_stream_t *channel,int own,int retu
             if((grid_focus||session_focus)&&(!own||g_logged)){grid_focus=0;session_focus=0;session_yes=0;armed=0;continue;}
             if(active>=0){task_cancel(&mt);while(!task_done(&mt))sceKernelDelayThread(10000);task_wait(&mt);}return;
         }
-        int ci=sel==1?0:sel==2?1:-1;
+        int ci=sel==1?0:sel==2?1:own&&sel==3?2:own&&sel==4?3:-1;
         if(!grid_focus&&!session_focus){
             if(b&SCE_CTRL_LEFT)sel=(sel+count-1)%count;
             if(b&SCE_CTRL_RIGHT)sel=(sel+1)%count;
         }
         int choose=armed&&(b&g_btn_ok),tab_touch=0;
         for(int i=0;i<count;i++)if(armed&&ui_touch_hit(&g_in,18+i*step,138,step-4,44)){sel=i;grid_focus=0;session_focus=0;session_yes=0;tab_touch=1;choose=0;break;}
-        ci=sel==1?0:sel==2?1:-1;
+        ci=sel==1?0:sel==2?1:own&&sel==3?2:own&&sel==4?3:-1;
         if(ci>=0){
             media_job_t *j=&catalogs[ci];
             if(state[ci]==3&&(choose||(b&SCE_CTRL_TRIANGLE)))state[ci]=0;
             if(state[ci]==2&&(b&SCE_CTRL_TRIANGLE)){state[ci]=0;grid_focus=0;cursor[ci]=0;}
-            if(state[ci]==0&&active<0){
+            if(ci>=2&&state[ci]==0){
+                memset(j,0,sizeof(*j));
+                for(int i=0;i<media_saved_n&&j->n<VT_MEDIA_MAX;i++)if(ci==2?media_saved[i].saved:media_saved[i].pos>0)j->out[j->n++]=media_saved[i].v;
+                state[ci]=2;
+            }
+            if(ci<2&&state[ci]==0&&active<0){
                 memset(j,0,sizeof(*j));j->n=-1;j->kind=ci?4:0;
                 snprintf(j->login,sizeof(j->login),"%s",s.login);snprintf(j->oauth,sizeof(j->oauth),"%s",g_logged?g_auth.access:"");
                 if(task_start(&mt,media_job_run,j)==0){active=ci;state[ci]=1;}else{state[ci]=3;snprintf(j->err,sizeof(j->err),"%s",vt_tr(VT_I_LOADING));}
@@ -2212,17 +2293,21 @@ static void channel_full_profile(const twitch_stream_t *channel,int own,int retu
                 if(b&SCE_CTRL_RTRIGGER&&(*pos/8+1)*8<j->n){*pos=(*pos/8+1)*8;grid_focus=1;choose=0;}
                 int page=*pos/8*8;
                 for(int k=0;k<8&&page+k<j->n;k++)if(armed&&ui_touch_hit(&g_in,18+(k%4)*232,193+(k/4)*152,222,148)){*pos=page+k;grid_focus=1;choose=1;break;}
+                if(grid_focus&&(b&SCE_CTRL_SQUARE)&&strcmp(j->out[*pos].type,"clip")){media_remember(&j->out[*pos],-1,1);if(ci==2)state[ci]=0;choose=0;}
                 if(choose&&grid_focus){
                     armed=0;
                     /* Finish another catalog's worker before entering the player. */
                     if(active>=0){task_cancel(&mt);while(!task_done(&mt))sceKernelDelayThread(10000);task_wait(&mt);state[active]=0;active=-1;}
+                    profile_bg=(profile_backdrop_t){&s,&details,catalogs,state,cursor,own,sel,grid_focus,session_focus,session_yes};
+                    g_media_backdrop=draw_profile_view;
                     for(;;){
-                        twitch_media_t v=j->out[*pos];
-                        int rc=recorded_play(&v,!ci&&*pos>0,!ci&&*pos+1<j->n);
+                        int rc=recorded_play(&j->out[*pos],*pos>0,*pos+1<j->n);
                         if(rc==PLAYER_PREVIOUS_MEDIA&&*pos>0){(*pos)--;continue;}
                         if(rc==PLAYER_NEXT_MEDIA&&*pos+1<j->n){(*pos)++;continue;}
                         break;
                     }
+                    g_media_backdrop=NULL;
+                    if(ci>=2)state[ci]=0;
                     ui_input_poll(&g_in);
                 }
             }
@@ -2250,56 +2335,9 @@ static void channel_full_profile(const twitch_stream_t *channel,int own,int retu
         }else if(choose||tab_touch){
             armed=0;
             if(sel==0){if(active>=0){task_cancel(&mt);while(!task_done(&mt))sceKernelDelayThread(10000);task_wait(&mt);active=-1;}if(return_to_live)return;if(s.live){play_channel(s.login,s.display,s.title,s.viewers);return;}else toast(vt_tr(VT_I_OFFLINE));}
-            if(own&&sel==3)recordings_screen_kind(NULL,5);
-            if(own&&sel==4)recordings_screen_kind(NULL,6);
         }
-        frame_begin();vita2d_draw_rectangle(0,0,960,544,CLASSIC_BG);
-        draw_avatar(s.avatar,s.display,25,20,84);
-        ui_text_fit(125,47,810,C_WHITE,1.35f,s.display[0]?s.display:s.login);
-        char at[64];snprintf(at,sizeof(at),"@%s",s.login);ui_text_fit(125,75,810,C_GREY,.95f,at);
-        ui_text_fit(125,103,810,s.live?C_RED:C_GREY,.9f,s.live?vt_tr(VT_I_LIVE):vt_tr(VT_I_OFFLINE));
-        const char *pt[]={"Ao vivo","Vídeos","Clipes","Salvos","Continuar","Sobre","Sessão"};
-        const char *es[]={"En vivo","Vídeos","Clips","Guardados","Continuar","Acerca de","Sesión"};
-        const char *en[]={"Live","Videos","Clips","Saved","Continue","About","Session"};
-        const char **labels=vt_lang_current()==2?pt:vt_lang_current()==1?es:en;
-        for(int i=0;i<count;i++){int x=18+i*step;ui_round_rect(x,138,step-4,44,5,sel==i?C_PURPLE:C_PANEL);ui_text_fit(x+8,167,step-20,C_WHITE,.9f,labels[!own&&i==3?5:i]);}
-        if(sel==(own?5:3)){
-            int ptbr=vt_lang_current()==2;char line[192];
-            ui_text_fit(30,211,900,C_WHITE,1.1f,ptbr?"Sobre o canal":"About the channel");
-            if(details.about.followers>=0)snprintf(line,sizeof(line),"%s: %d",ptbr?"Seguidores":"Followers",details.about.followers);
-            else snprintf(line,sizeof(line),"%s: —",ptbr?"Seguidores":"Followers");
-            ui_text_fit(30,242,440,C_GREY,.94f,line);
-            snprintf(line,sizeof(line),"%s: %.10s",ptbr?"Conta criada":"Joined",details.about.created[0]?details.about.created:"—");
-            ui_text_fit(490,242,440,C_GREY,.94f,line);
-            snprintf(line,sizeof(line),"twitch.tv/%s",s.login);ui_text_fit(30,269,900,C_WHITE,.9f,line);
-            ui_text_fit(30,302,900,C_WHITE,1.0f,ptbr?"Biografia":"Biography");
-            wrap_text(30,327,900,C_GREY,.87f,details.about.bio[0]?details.about.bio:ptbr?"Não disponível.":"Unavailable.",3);
-            ui_text_fit(30,411,900,C_WHITE,1.0f,ptbr?"Links e redes sociais":"Links and social media");
-            wrap_text(30,439,900,C_GREY,.8f,details.about.links[0]?details.about.links:ptbr?"Links não disponibilizados pela Twitch.":"Links unavailable from Twitch.",3);
-        }else if(own&&sel==6){
-            ui_text_center(480,270,C_WHITE,1.25f,session_text(0));
-            for(int i=0;i<2;i++){
-                int xx=180+i*320,selected=(i==0)==session_yes;
-                ui_round_rect(xx,320,280,58,6,selected?CLASSIC_PURPLE:C_PANEL);
-                if(selected&&session_focus)ui_frame(xx,320,280,58,2,C_WHITE);
-                ui_text_center(xx+140,358,C_WHITE,1.05f,session_text(i+1));
-            }
-        }else if(sel==0){ui_text_fit(30,235,900,C_WHITE,1.1f,s.live?s.title:vt_tr(VT_I_OFFLINE));wrap_text(30,285,900,C_GREY,.9f,details.about.bio,4);}
-        else if(ci>=0){
-            media_job_t *j=&catalogs[ci];
-            if(state[ci]==0||state[ci]==1){ui_spinner(480,315,18,C_PURPLE);ui_text_center(480,352,C_WHITE,1.f,vt_tr(VT_I_LOADING));}
-            else if(state[ci]==3){ui_text_fit(30,475,900,C_GREY,.88f,j->err);ui_text_center(480,352,C_WHITE,.95f,vt_lang_current()==2?"X: tentar novamente":"Confirm: retry");}
-            else if(j->n==0)ui_text_center(480,352,C_GREY,1.f,vt_lang_current()==2?(ci?"Nenhum clipe":"Nenhum vídeo"):(ci?"No clips":"No videos"));
-            else{
-                int page=cursor[ci]/8*8;
-                for(int k=0;k<8&&page+k<j->n;k++)profile_media_card(&j->out[page+k],18+(k%4)*232,193+(k/4)*152,grid_focus&&cursor[ci]==page+k);
-                char pages[48];snprintf(pages,sizeof(pages),"%d / %d",page/8+1,(j->n+7)/8);ui_text_fit(810,520,125,C_GREY,.82f,pages);
-            }
-        }else ui_text_fit(30,235,900,C_GREY,1.05f,vt_lang_current()==2?"Confirme para abrir esta seção":"Confirm to open this section");
-        if(own&&sel==6){
-            ui_hint_bounded(25,520,440,g_ok_name,vt_msg("Aceptar"));
-            ui_hint_bounded(500,520,420,g_back_name,vt_tr(VT_I_BACK));
-        }else ui_text_fit(25,520,ci>=0?770:910,C_WHITE,.82f,ci>=0?(vt_lang_current()==2?"Setas: navegar | L/R: páginas | X: abrir | Triângulo: atualizar | O: voltar":"D-pad: navigate | L/R: pages | Confirm: open | Triangle: refresh | Back"):(vt_lang_current()==2?"Esquerda/direita: abas | Confirmar | Voltar":"Left/right: tabs | Confirm | Back"));
+        profile_bg=(profile_backdrop_t){&s,&details,catalogs,state,cursor,own,sel,grid_focus,session_focus,session_yes};
+        frame_begin();draw_profile_view();
         frame_end();
     }
 }
@@ -2337,8 +2375,10 @@ static void open_selected(void)
     else profile_screen(&s);
 }
 
+static void clear_search(void){tab_t *tb=&g_tabs[TAB_SEARCH];g_search[0]=0;tb->count=0;tb->sel=-1;tb->scroll=0;tb->state=LS_EMPTY;if(tb->busy)task_cancel(&tb->task);settings_save();}
 static void home_switch(int t)
 {
+    if(g_tab==TAB_SEARCH&&t!=TAB_SEARCH)clear_search();
     g_tab=t;g_side_focus=-1;g_touch_manual_scroll=0;
     if(t!=TAB_EXPLORE)g_game_filter[0]=g_game_id[0]=g_game_slug[0]=0;
     tab_t *tb=&g_tabs[t];tb->scroll=0;tb->sel=t==TAB_SEARCH?-1:home_index(tb,0);
@@ -2407,7 +2447,7 @@ static void games_screen(void)
             snprintf(g_game_filter,sizeof(g_game_filter),"%s",g->name);
             snprintf(g_game_id,sizeof(g_game_id),"%s",g->id);
             snprintf(g_game_slug,sizeof(g_game_slug),"%s",g->slug);
-            if(g_tv_layout){g_tv_home=0;g_tv_nav=3;g_tv_nav_focus=0;}
+            if(g_tv_layout){g_tv_home=0;g_tv_nav=2;g_tv_nav_focus=0;}
             home_switch(TAB_EXPLORE);return;
         }
         sceKernelPowerTick(SCE_KERNEL_POWER_TICK_DISABLE_AUTO_SUSPEND);
@@ -2451,7 +2491,7 @@ static void tv_activate(int i){
     case 0:g_tv_home=1;g_game_filter[0]=g_game_id[0]=g_game_slug[0]=0;home_switch(TAB_EXPLORE);if(g_tabs[TAB_FOLLOWED].state==LS_EMPTY)tab_load(TAB_FOLLOWED);break;
     case 1:g_tv_home=0;home_switch(TAB_FOLLOWED);break;
     case 2:g_tv_home=0;g_game_filter[0]=g_game_id[0]=g_game_slug[0]=0;home_switch(TAB_EXPLORE);break;
-    case 3:g_tv_home=0;games_screen();break;
+    case 3:if(g_tab==TAB_SEARCH)clear_search();recordings_screen_kind(NULL,5);g_tv_nav_focus=1;break;
     case 4:g_tv_home=0;home_switch(TAB_SEARCH);break;
     case 5:account_screen();g_tv_nav_focus=1;break;
     case 6:extras_menu();g_tv_nav_focus=1;break;
@@ -2474,13 +2514,13 @@ static void tv_input(void){
             return;
         }
         if(g_tab==TAB_SEARCH&&ui_touch_hit(&g_in,20,60,920,35)){tb->sel=-1;g_tv_nav_focus=0;open_selected();return;}
-        int grid=!g_tv_home&&g_tab==TAB_EXPLORE&&!g_game_id[0]&&!g_game_filter[0];
+        int grid=!g_tv_home&&(g_tab==TAB_FOLLOWED||(g_tab==TAB_EXPLORE&&!g_game_id[0]&&!g_game_filter[0]));
         for(int row=0;row<(g_tv_home?2:1);row++){
             int t=g_tv_home?(row?TAB_EXPLORE:TAB_FOLLOWED):g_tab;tab_t *r=&g_tabs[t];int n=home_count(r),pos=home_pos(r),slots=grid?8:4,first=pos>=0?pos/slots*slots:0;
             for(int k=0;k<slots&&first+k<n;k++)if(ui_touch_hit(&g_in,20+(k%4)*233,tv_row_top()+(row+k/4)*TV_ROW_STEP,TV_TILE_W,TV_TILE_HIT_H)){g_tab=t;g_side_focus=-1;g_tv_nav_focus=0;r->sel=home_index(r,first+k);open_selected();return;}
         }
-        int cell=(SCREEN_W-24)/(g_tab!=TAB_EXPLORE?6:5);
-        if(ui_touch_hit(&g_in,12+cell*(g_tab!=TAB_EXPLORE?5:4),FOOTER_Y,cell,SCREEN_H-FOOTER_Y)){
+        int cell=(SCREEN_W-24)/(6);
+        if(ui_touch_hit(&g_in,12+cell*(5),FOOTER_Y,cell,SCREEN_H-FOOTER_Y)){
             g_tv_nav_focus=0;g_side_focus=-1;profile_selected();return;
         }
         if(ui_touch_hit(&g_in,12,FOOTER_Y,cell,SCREEN_H-FOOTER_Y)){
@@ -2488,19 +2528,21 @@ static void tv_input(void){
             if(tb->need_login)tv_activate(5);else open_selected();return;
         }
         if(ui_touch_hit(&g_in,12+cell,FOOTER_Y,cell,SCREEN_H-FOOTER_Y)){img_clear();tab_load(g_tab);return;}
-        if(ui_touch_hit(&g_in,12+cell*(g_tab!=TAB_EXPLORE?4:3),FOOTER_Y,cell,SCREEN_H-FOOTER_Y)){extras_menu();return;}
+        if(ui_touch_hit(&g_in,12+2*cell,FOOTER_Y,cell,SCREEN_H-FOOTER_Y)){games_screen();return;}
+        if(ui_touch_hit(&g_in,12+cell*(4),FOOTER_Y,cell,SCREEN_H-FOOTER_Y)){extras_menu();return;}
         return;
     }
-    if(p&SCE_CTRL_TRIANGLE){img_clear();tab_load(g_tab);return;}
-    if(p&SCE_CTRL_SQUARE&&g_tab==TAB_FOLLOWED){g_follow_offline=(g_follow_offline+1)%3;settings_save();following_rebuild();tab_load(g_tab);return;}
+    if(p&SCE_CTRL_TRIANGLE){if(g_tab==TAB_FOLLOWED&&(g_in.held&SCE_CTRL_LTRIGGER)){g_follow_offline=(g_follow_offline+1)%3;settings_save();following_rebuild();}img_clear();tab_load(g_tab);return;}
+    if(p&SCE_CTRL_SQUARE){games_screen();return;}
+
     if(g_tv_nav_focus){
         if(p&SCE_CTRL_LEFT)g_tv_nav=(g_tv_nav+TV_NAV_COUNT-1)%TV_NAV_COUNT;
         if(p&SCE_CTRL_RIGHT)g_tv_nav=(g_tv_nav+1)%TV_NAV_COUNT;
         if(p&g_btn_ok){tv_activate(g_tv_nav);return;}
         if(p&SCE_CTRL_DOWN){g_tv_nav_focus=0;return;}return;
     }
-    if(p&g_btn_back){g_tv_nav_focus=1;return;}
-    int grid=!g_tv_home&&g_tab==TAB_EXPLORE&&!g_game_id[0]&&!g_game_filter[0];
+    if(p&g_btn_back){if(g_tab==TAB_SEARCH)clear_search();g_tv_nav_focus=1;return;}
+    int grid=!g_tv_home&&(g_tab==TAB_FOLLOWED||(g_tab==TAB_EXPLORE&&!g_game_id[0]&&!g_game_filter[0]));
     if(grid&&(p&(SCE_CTRL_UP|SCE_CTRL_DOWN))){
         int pos=home_pos(tb),n=home_count(tb);
         if((p&SCE_CTRL_DOWN)&&pos>=0&&pos+4<n){tb->sel=home_index(tb,pos+4);return;}
@@ -2567,12 +2609,13 @@ int main(void)
 
         if(ui_touch_hit(&g_in,778,0,182,HEADER_H)){g_side_focus=PROFILE_FOCUS;account_screen();continue;}
         /* Never consume a touch/drag in the controller-only profile focus path. */
-        if(g_side_focus==PROFILE_FOCUS&&!g_in.touch_tap&&!g_in.touch_down){if(p&g_btn_ok){account_screen();continue;}if(p&SCE_CTRL_DOWN)g_side_focus=-1;else if(p&(SCE_CTRL_LEFT|g_btn_back))g_side_focus=side_active();if(!(p&(SCE_CTRL_LTRIGGER|SCE_CTRL_RTRIGGER|SCE_CTRL_SELECT))){frame_begin();draw_home();frame_end();continue;}}
-        int profile_cell=(SCREEN_W-24)/(g_tab!=TAB_EXPLORE?6:5);
-        if((p&SCE_CTRL_START)||ui_touch_hit(&g_in,12+profile_cell*(g_tab!=TAB_EXPLORE?5:4),FOOTER_Y,profile_cell,SCREEN_H-FOOTER_Y)){
+        if(g_side_focus==PROFILE_FOCUS&&!g_in.touch_tap&&!g_in.touch_down&&!(p&SCE_CTRL_SQUARE)){if(p&g_btn_ok){account_screen();continue;}if(p&SCE_CTRL_DOWN)g_side_focus=-1;else if(p&(SCE_CTRL_LEFT|g_btn_back))g_side_focus=side_active();if(!(p&(SCE_CTRL_LTRIGGER|SCE_CTRL_RTRIGGER|SCE_CTRL_SELECT))){frame_begin();draw_home();frame_end();continue;}}
+        int profile_cell=(SCREEN_W-24)/(6);
+        if((p&SCE_CTRL_START)||ui_touch_hit(&g_in,12+profile_cell*(5),FOOTER_Y,profile_cell,SCREEN_H-FOOTER_Y)){
             if(g_in.touch_tap)g_side_focus=-1;
             profile_selected();continue;
         }
+        if(ui_touch_hit(&g_in,12+2*profile_cell,FOOTER_Y,profile_cell,SCREEN_H-FOOTER_Y)){games_screen();continue;}
         if (p & (SCE_CTRL_LTRIGGER | SCE_CTRL_RTRIGGER)) {
             g_game_filter[0]=g_game_id[0]=g_game_slug[0]=0;
             home_switch((g_tab+(p&SCE_CTRL_RTRIGGER?1:TAB_COUNT-1))%TAB_COUNT);
@@ -2602,15 +2645,8 @@ int main(void)
             img_clear(); /* thumbnails are refreshed by Twitch every few minutes */
             tab_load(g_tab);
         }
-        if(g_tab==TAB_FOLLOWED&&(p&SCE_CTRL_SQUARE)){g_follow_offline=(g_follow_offline+1)%3;settings_save();following_rebuild();tab_load(TAB_FOLLOWED);continue;}
-        if (g_tab == TAB_SEARCH && (p & SCE_CTRL_SQUARE) && g_search[0]) {
-            char login[32];
-            if (twitch_sanitize_login(g_search, login, sizeof(login)) >= 3)
-                play_channel(login, login, NULL,-1);
-            else
-                toast(vt_msg("Ese nombre no es un canal valido"));
-            continue;
-        }
+        if(p&SCE_CTRL_SQUARE){games_screen();continue;}
+        if(p&SCE_CTRL_TRIANGLE&&g_tab==TAB_FOLLOWED&&(g_in.held&SCE_CTRL_LTRIGGER)){g_follow_offline=(g_follow_offline+1)%3;settings_save();following_rebuild();tab_load(g_tab);continue;}
 
         /* Sidebar and mosaic share the same geometry as touch. */
         if(p&(SCE_CTRL_UP|SCE_CTRL_DOWN|SCE_CTRL_LEFT|SCE_CTRL_RIGHT))g_touch_manual_scroll=0;
@@ -2629,7 +2665,7 @@ int main(void)
             else if(p&SCE_CTRL_DOWN){if(pos<0&&n)next=0;else if(pos>=0)next=home_move(pos,n,0,1);}
             else if(p&SCE_CTRL_UP){if(pos>=0)next=home_move(pos,n,0,-1);if(next<0){if(g_tab==TAB_SEARCH&&tb->sel>=0)tb->sel=-1;else g_side_focus=PROFILE_FOCUS;}}
             if(next>=0)tb->sel=home_index(tb,next);
-            if(p&g_btn_back)g_side_focus=side_active();
+            if(p&g_btn_back){if(g_tab==TAB_SEARCH)clear_search();g_side_focus=side_active();}
             if(g_tab!=TAB_SEARCH&&home_pos(tb)<0&&n)tb->sel=home_index(tb,0);
             if(g_side_focus<0&&(p&g_btn_ok)){
                 if(tb->need_login)g_side_focus=PROFILE_FOCUS;

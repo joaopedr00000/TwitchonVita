@@ -25,6 +25,8 @@ typedef struct {
     const char *chat_sender_id;
     int profile;
     int recorded,start_seconds,duration_seconds;
+    int timeline_offset; /* source VOD offset for a clip; display relative position */
+    void (*loading_backdrop)(void);
     int media_navigation,can_previous,can_next;
     int preview_end;
     const char *preview_playlist;

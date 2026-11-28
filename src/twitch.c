@@ -76,7 +76,9 @@ const char *twitch_vod_rejection(const char *body){
         json_str(r,"0.error",""),json_str(r,"0.message",""),
         json_str(r,"error",""),json_str(r,"message",""));
     for(size_t i=0;lower[i];i++)lower[i]=(char)tolower((unsigned char)lower[i]);
-    const char *why=strstr(lower,"subscriber")||strstr(lower,"subscription")?"SUBSCRIPTION":
+    const char *code=json_str(r,"0.error_code",json_str(r,"error_code",""));
+    const char *why=!strcmp(code,"vod_manifest_restricted")||!strcmp(code,"unauthorized_entitlements")||
+        strstr(lower,"subscriber")||strstr(lower,"subscription")?"SUBSCRIPTION":
         strstr(lower,"geo")||strstr(lower,"region")?"REGION":
         strstr(lower,"expired")?"EXPIRED":
         strstr(lower,"signature")?"SIGNATURE":

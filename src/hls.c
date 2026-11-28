@@ -125,8 +125,8 @@ static void *hls_thread(void *argp)
     if(h->recorded==2){
         int rc=http_media_get(c,trust,h->url,&seg,&status,&h->abort_req);
         if(rc||status!=200){snprintf(h->error,sizeof(h->error),"Clip MP4 HTTP %ld curl %d",status,-rc);goto done;}
-        h->actual_start=0;h->duration_seconds=h->start_seconds;h->position_ready=1;
-        if(mp4_demux_file(&h->mp4,seg.data,seg.size)<0){if(h->running)snprintf(h->error,sizeof(h->error),"Unsupported or incomplete clip MP4");}
+        h->actual_start=0;h->position_ready=1;
+        if(mp4_demux_file_seek(&h->mp4,seg.data,seg.size,h->start_seconds,&h->actual_start)<0){if(h->running)snprintf(h->error,sizeof(h->error),"Unsupported or incomplete clip MP4");}
         else h->segments_done=1;
         goto done;
     }
@@ -317,7 +317,7 @@ static int hls_start_mode(hls_t *h, const char *media_url, pktqueue_t *vq, pktqu
               const char *channel,const char *oauth,int width,int height,float fps,char *backup_url,int recorded,int start_seconds,const char *preview,m3u8_preview_t *capture)
 {
     memset(h, 0, sizeof(*h));
-    h->recorded=recorded;h->start_seconds=start_seconds;h->preview_playlist=preview;h->capture=capture;
+    h->recorded=recorded;h->start_seconds=start_seconds;if(recorded==2)h->duration_seconds=width;h->preview_playlist=preview;h->capture=capture;
     if(capture){capture->duration=0;capture->text[0]=0;}
     h->channel=channel;h->oauth=oauth;h->width=width;h->height=height;h->fps=fps;
     h->backup_url=backup_url;
@@ -353,7 +353,7 @@ int hls_start_recorded(hls_t *h,const char *url,pktqueue_t *vq,pktqueue_t *aq,in
 
 int hls_start_capture(hls_t *h,const char *url,pktqueue_t *vq,pktqueue_t *aq,int edge,const char *channel,const char *oauth,int width,int height,float fps,char *backup,m3u8_preview_t *capture){return hls_start_mode(h,url,vq,aq,edge,channel,oauth,width,height,fps,backup,0,0,NULL,capture);}
 int hls_start_preview(hls_t *h,const char *playlist,pktqueue_t *vq,pktqueue_t *aq,int start){return hls_start_mode(h,"https://usher.ttvnw.net/",vq,aq,1,NULL,NULL,0,0,0,NULL,1,start,playlist,NULL);}
-int hls_start_clip(hls_t *h,const char *url,pktqueue_t *vq,pktqueue_t *aq,int duration){return hls_start_mode(h,url,vq,aq,1,NULL,NULL,0,0,0,NULL,2,duration,NULL,NULL);}
+int hls_start_clip(hls_t *h,const char *url,pktqueue_t *vq,pktqueue_t *aq,int duration,int start){return hls_start_mode(h,url,vq,aq,1,NULL,NULL,duration,0,0,NULL,2,start,NULL,NULL);}
 void hls_stop(hls_t *h)
 {
     h->running = 0;

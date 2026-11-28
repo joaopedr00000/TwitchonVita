@@ -42,7 +42,7 @@ int hls_start(hls_t *h, const char *media_url, pktqueue_t *vq, pktqueue_t *aq, i
 int hls_start_recorded(hls_t *h,const char *media_url,pktqueue_t *vq,pktqueue_t *aq,int start_seconds);
 int hls_start_capture(hls_t *h,const char *url,pktqueue_t *vq,pktqueue_t *aq,int edge,const char *channel,const char *oauth,int width,int height,float fps,char *backup,m3u8_preview_t *capture);
 int hls_start_preview(hls_t *h,const char *playlist,pktqueue_t *vq,pktqueue_t *aq,int start);
-int hls_start_clip(hls_t *h,const char *url,pktqueue_t *vq,pktqueue_t *aq,int duration);
+int hls_start_clip(hls_t *h,const char *url,pktqueue_t *vq,pktqueue_t *aq,int duration,int start);
 void hls_stop(hls_t *h);
 
 #endif
