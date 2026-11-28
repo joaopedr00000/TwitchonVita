@@ -45,7 +45,7 @@ int _newlib_heap_size_user = 96 * 1024 * 1024;
 #define SETTINGS_FILE DATA_DIR "/settings.txt"
 #define LOG_FILE      DATA_DIR "/log.txt"
 #define LOG_PREV_FILE DATA_DIR "/log_prev.txt"
-#define APP_VERSION   "1.34-follow-local-test9"
+#define APP_VERSION   "1.34-unified-follow-tv-test10"
 
 #define MAX_ITEMS 100
 
@@ -118,12 +118,14 @@ typedef struct {
     char oauth[64];
     twitch_stream_t out[MAX_ITEMS];
     int n;
+    twitch_stream_t local[MAX_ITEMS];
+    int local_n;
     char err[160];
 } list_job_t;
 
 typedef struct {
     list_state_t state;
-    twitch_stream_t items[MAX_ITEMS];
+    twitch_stream_t items[MAX_ITEMS*2];
     int count;
     int sel;            /* -1 = search bar (Buscar tab) */
     float scroll;
@@ -170,6 +172,11 @@ static void ensure_data_dir(void)
 #define SAVED_FILE DATA_DIR "/saved-channels.txt"
 static twitch_stream_t saved_channels[MAX_ITEMS],saved_work[MAX_ITEMS];
 static int saved_n;
+static twitch_stream_t account_channels[MAX_ITEMS], local_live[MAX_ITEMS];
+static int account_n, local_live_n;
+static char account_oauth[sizeof(g_auth.access)];
+static int following_dirty;
+static void following_rebuild(void);
 static const char *saved_label(int saved){
     int l=vt_lang_current();return saved?(l==2?"Remover do Vita":l==1?"Quitar de Vita":"Remove from Vita"):(l==2?"Salvar no Vita":l==1?"Guardar en Vita":"Save on Vita");
 }
@@ -200,20 +207,53 @@ static int saved_toggle(const char *login,const char *display,const char *avatar
     /* Preserve the previous file even when the filesystem cannot replace it. */
     sceIoRemove(SAVED_FILE ".bak");int backed=sceIoRename(SAVED_FILE,SAVED_FILE ".bak")>=0;
     if(sceIoRename(SAVED_FILE ".tmp",SAVED_FILE)<0){if(backed)sceIoRename(SAVED_FILE ".bak",SAVED_FILE);sceIoRemove(SAVED_FILE ".tmp");return -1;}
-    sceIoRemove(SAVED_FILE ".bak");memcpy(saved_channels,saved_work,(size_t)n*sizeof(saved_work[0]));saved_n=n;
+    sceIoRemove(SAVED_FILE ".bak");memcpy(saved_channels,saved_work,(size_t)n*sizeof(saved_work[0]));saved_n=n;following_dirty=1;following_rebuild();
     return at<0?1:0;
 }
 static int saved_ensure(const char *login,const char *display,const char *avatar){
     if(saved_has(login))return 1; /* idempotent; never toggle a saved channel off */
     return saved_toggle(login,display,avatar);
 }
-static int account_follow_known(const char *login){
-    tab_t *tb=&g_tabs[TAB_FOLLOWED];
-    if(!g_logged||!login||!*login||tb->state!=LS_READY||g_follow_offline==2||tb->job.kind==TW_LIST_SAVED||strcmp(tb->job.oauth,g_auth.access))return 0;
-    for(int i=0;i<tb->count;i++)if(!strcmp(tb->items[i].login,login))return 1;
-    return 0; /* absence is not proof: live-only/limited list */
+static int stream_find(const twitch_stream_t *items,int n,const char *login){
+    for(int i=0;i<n;i++)if(!strcmp(items[i].login,login))return i;
+    return -1;
 }
-static const char *following_mode(void){return g_follow_offline==2?saved_title():g_follow_offline==1?(vt_lang_current()==2?"Todos os seguidos":"All follows"):vt_tr(VT_I_LIVE);}
+static int account_valid(void){return g_logged&&account_oauth[0]&&!strcmp(account_oauth,g_auth.access);}
+static int account_follow_known(const char *login){
+    return login&&*login&&account_valid()&&stream_find(account_channels,account_n,login)>=0;
+}
+static const char *following_mode(void){
+    int l=vt_lang_current();
+    return g_follow_offline==2?saved_title():g_follow_offline==1?vt_tr(VT_I_LIVE):(l==2?"Todos os seguidos":l==1?"Todos los seguidos":"All follows");
+}
+/* The account cache is never populated from local bookmarks. Rebuild the visible
+ * union from the current saved file and authenticated account data. */
+static void following_rebuild(void){
+    tab_t *tb=&g_tabs[TAB_FOLLOWED];char cur[32]="";
+    if(tb->sel>=0&&tb->sel<tb->count)snprintf(cur,sizeof(cur),"%s",tb->items[tb->sel].login);
+    int n=0,remote=account_valid()?account_n:0;
+    if(g_follow_offline!=2)for(int i=0;i<remote;i++){
+        const twitch_stream_t *s=&account_channels[i];
+        int k=stream_find(local_live,local_live_n,s->login);
+        if(k>=0&&local_live[k].live&&!s->live)s=&local_live[k];
+        if(g_follow_offline==1&&!s->live)continue;
+        if(stream_find(tb->items,n,s->login)<0)tb->items[n++]=*s;
+    }
+    for(int i=0;i<saved_n;i++){
+        const twitch_stream_t *s=&saved_channels[i];
+        int k=stream_find(local_live,local_live_n,s->login);
+        int a=stream_find(account_channels,remote,s->login);
+        if(k>=0)s=&local_live[k];
+        if(a>=0&&(account_channels[a].live||k<0))s=&account_channels[a];
+        if(g_follow_offline==1&&!s->live)continue;
+        if(stream_find(tb->items,n,s->login)<0)tb->items[n++]=*s;
+    }
+    twitch_sort_by_viewers(tb->items,n);
+    tb->count=n;tb->sel=cur[0]?stream_find(tb->items,n,cur):-1;
+    if(tb->sel<0)tb->sel=0;
+    tb->need_login=!g_logged&&!saved_n;
+    tb->state=LS_READY;
+}
 static void settings_load(void)
 {
     char line[160];
@@ -241,7 +281,7 @@ static void settings_load(void)
         else if (!strncmp(line, "volume=", 7)) {int v=atoi(line+7);if(v>=0&&v<=100)g_volume=v;}
         else if (!strncmp(line, "remember=", 9)) g_remember=atoi(line+9)!=0;
         else if (!strncmp(line,"tv_layout=",10))g_tv_layout=atoi(line+10)!=0;
-        else if (!strncmp(line,"follow_offline=",15)){int mode=atoi(line+15);g_follow_offline=mode>=0&&mode<=2?mode:0;}
+        else if (!strncmp(line,"following_filter=",17)){int mode=atoi(line+17);g_follow_offline=mode>=0&&mode<=2?mode:0;}
         else if (!strncmp(line, "touch=", 6))
             ui_touch_enable(atoi(line + 6) != 0);
     }
@@ -259,7 +299,7 @@ static void settings_save(void)
             g_pref_quality, g_search, g_chat_on,
             vt_lang_code(vt_lang_current()), ui_touch_enabled());
     fprintf(f,"profile=%d\nauto_quality=%d\ndiag=%d\nvolume=%d\nremember=%d\n",g_profile,g_auto_quality,g_diag,g_volume,g_remember);
-    fprintf(f,"region=%s\nquality_flow=3\ntv_layout=%d\nfollow_offline=%d\n",region_codes[g_region],g_tv_layout,g_follow_offline);
+    fprintf(f,"region=%s\nquality_flow=3\ntv_layout=%d\nfollowing_filter=%d\n",region_codes[g_region],g_tv_layout,g_follow_offline);
     fclose(f);
 }
 
@@ -283,7 +323,8 @@ static int list_job_run(void *arg, volatile int *abort_flag)
 {
     list_job_t *j = arg;
     j->err[0] = 0;
-    if(j->kind==TW_LIST_SAVED){twitch_refresh_saved(j->out,j->n,abort_flag);return j->n;}
+    if(j->kind==TW_LIST_SAVED){twitch_refresh_saved(j->local,j->local_n,abort_flag);j->n=0;return 0;}
+    if(j->kind==TW_LIST_ALL_FOLLOWS)twitch_refresh_saved(j->local,j->local_n,abort_flag);
     j->n = twitch_fetch_list(j->kind, j->query, j->oauth, j->out, MAX_ITEMS,
                              j->err, sizeof(j->err), abort_flag);
     return j->n;
@@ -292,25 +333,19 @@ static int list_job_run(void *arg, volatile int *abort_flag)
 static void tab_load(int t)
 {
     tab_t *tb = &g_tabs[t];
-    if (tb->busy)
-        return;
-    tb->need_login = 0;
-    if(t==TAB_FOLLOWED&&g_follow_offline==2){
-        memcpy(tb->items,saved_channels,(size_t)saved_n*sizeof(tb->items[0]));tb->count=saved_n;tb->state=LS_READY;
-        if(tb->sel<0||tb->sel>=tb->count)tb->sel=0;
-        if(saved_n&&net_connected()){list_job_t *j=&tb->job;j->kind=TW_LIST_SAVED;j->n=saved_n;memcpy(j->out,saved_channels,(size_t)saved_n*sizeof(j->out[0]));if(task_start(&tb->task,list_job_run,j)==0)tb->busy=1;}
-        return;
-    }
-    if (t == TAB_FOLLOWED && !g_logged) {
-        tb->state = LS_READY;
-        tb->count = 0;
-        tb->need_login = 1;
+    if(t==TAB_FOLLOWED){
+        following_rebuild();
+        if(tb->busy||g_auth_checking||!net_connected())return;
+        if(!g_logged&&!saved_n)return;
+        list_job_t *j=&tb->job;
+        j->kind=g_logged?TW_LIST_ALL_FOLLOWS:TW_LIST_SAVED;
+        j->local_n=saved_n;memcpy(j->local,saved_channels,(size_t)saved_n*sizeof(j->local[0]));
+        snprintf(j->oauth,sizeof(j->oauth),"%s",g_logged?g_auth.access:"");
+        if(task_start(&tb->task,list_job_run,j)==0){tb->busy=1;following_dirty=0;}
         return;
     }
-    if (t == TAB_FOLLOWED && g_auth_checking) {
-        tb->state = LS_LOADING; /* started once the session check finishes */
-        return;
-    }
+    if(tb->busy)return;
+    tb->need_login=0;
     if (t == TAB_SEARCH && !g_search[0]) {
         tb->state = LS_EMPTY;
         tb->count = 0;
@@ -323,7 +358,7 @@ static void tab_load(int t)
         return;
     }
     list_job_t *j = &tb->job;
-    j->kind = t == TAB_FOLLOWED ? (g_follow_offline?TW_LIST_ALL_FOLLOWS:TW_LIST_FOLLOWED) : t == TAB_EXPLORE ? (g_game_id[0]?TW_LIST_CATEGORY:TW_LIST_TOP) : TW_LIST_SEARCH;
+    j->kind = t == TAB_EXPLORE ? (g_game_id[0]?TW_LIST_CATEGORY:TW_LIST_TOP) : TW_LIST_SEARCH;
     if(t==TAB_EXPLORE)explore_query(j->query,sizeof(j->query));else snprintf(j->query,sizeof(j->query),"%s",g_search);
     snprintf(j->oauth, sizeof(j->oauth), "%s", g_logged ? g_auth.access : "");
     if (task_start(&tb->task, list_job_run, j) == 0) {
@@ -340,14 +375,25 @@ static void tabs_update(void)
         if (!tb->busy || !task_done(&tb->task))
             continue;
         tb->busy = 0;
-        if(t==TAB_FOLLOWED&&((!g_logged&&g_follow_offline!=2)||tb->job.kind!=(g_follow_offline==2?TW_LIST_SAVED:g_follow_offline==1?TW_LIST_ALL_FOLLOWS:TW_LIST_FOLLOWED))){tb->count=0;tb->state=LS_EMPTY;tab_load(t);continue;}
-        if(t==TAB_EXPLORE){char expected[256];explore_query(expected,sizeof(expected));if(strcmp(tb->job.query,expected)){tb->state=LS_EMPTY;tb->count=0;tab_load(t);continue;}}
-        if(t==TAB_FOLLOWED&&tb->job.kind==TW_LIST_SAVED){
-            /* The user may have changed local favorites during the refresh. */
-            int n=0;for(int i=0;i<tb->job.n;i++)if(saved_has(tb->job.out[i].login))tb->job.out[n++]=tb->job.out[i];
-            for(int i=0;i<saved_n&&n<MAX_ITEMS;i++){int found=0;for(int k=0;k<n;k++)if(!strcmp(tb->job.out[k].login,saved_channels[i].login))found=1;if(!found)tb->job.out[n++]=saved_channels[i];}
-            tb->job.n=n;
+        if(t==TAB_FOLLOWED){
+            list_job_t *j=&tb->job;
+            if((j->kind==TW_LIST_ALL_FOLLOWS&&(!g_logged||strcmp(j->oauth,g_auth.access)))||
+               (j->kind==TW_LIST_SAVED&&g_logged)){tab_load(t);continue;}
+            if(j->kind==TW_LIST_ALL_FOLLOWS&&j->n>=0){
+                account_n=j->n;memcpy(account_channels,j->out,(size_t)account_n*sizeof(account_channels[0]));
+                snprintf(account_oauth,sizeof(account_oauth),"%s",j->oauth);
+            }else if(j->kind==TW_LIST_ALL_FOLLOWS&&j->n<0&&!tb->task.abort_flag){
+                LOGW("Following account refresh failed: %s",j->err);
+                if(!account_valid()&&!saved_n){tb->count=0;tb->state=LS_ERROR;snprintf(tb->err,sizeof(tb->err),"%s",j->err);continue;}
+                toast(j->err);
+            }
+            local_live_n=0;
+            for(int i=0;i<j->local_n;i++)if(saved_has(j->local[i].login))local_live[local_live_n++]=j->local[i];
+            following_rebuild();
+            if(following_dirty)tab_load(t);
+            continue;
         }
+        if(t==TAB_EXPLORE){char expected[256];explore_query(expected,sizeof(expected));if(strcmp(tb->job.query,expected)){tb->state=LS_EMPTY;tb->count=0;tab_load(t);continue;}}
         if (tb->job.n >= 0)
             LOGI("%s: %d canales", tab_name(t), tb->job.n);
         else if (tb->job.n == -2)
@@ -419,8 +465,7 @@ static void auth_update(void)
         sceIoRemove(AUTH_FILE);
         toast(g_auth_job.err);
     }
-    if (g_tabs[TAB_FOLLOWED].state == LS_LOADING || g_tab == TAB_FOLLOWED)
-        tab_load(TAB_FOLLOWED);
+    tab_load(TAB_FOLLOWED);
 }
 
 /* ---------------------------------------------------------- drawing */
@@ -443,14 +488,14 @@ static home_rect_t home_rect(int i)
 static int home_count(const tab_t *tb)
 {
     if(tb->state!=LS_READY)return 0;
-    if(g_tab!=TAB_EXPLORE||!g_game_filter[0]||g_game_id[0])return tb->count;
+    if(tb!=&g_tabs[TAB_EXPLORE]||!g_game_filter[0]||g_game_id[0])return tb->count;
     int n=0;for(int i=0;i<tb->count;i++)if(!strcmp(tb->items[i].game,g_game_filter))n++;
     return n;
 }
 static int home_index(const tab_t *tb,int pos)
 {
     if(pos<0)return -1;
-    if(g_tab!=TAB_EXPLORE||!g_game_filter[0]||g_game_id[0])return pos<tb->count?pos:-1;
+    if(tb!=&g_tabs[TAB_EXPLORE]||!g_game_filter[0]||g_game_id[0])return pos<tb->count?pos:-1;
     for(int i=0;i<tb->count;i++)if(!strcmp(tb->items[i].game,g_game_filter)&&pos--==0)return i;
     return -1;
 }
@@ -577,7 +622,7 @@ static void draw_header(void)
         vita2d_draw_rectangle(SIDE_X,y,SIDE_W,SIDE_H,i==active?RGBA8(120,80,189,255):CLASSIC_PURPLE);
         if(g_side_focus==i)ui_frame(SIDE_X,y,SIDE_W,SIDE_H,2,C_WHITE);
         int label_w=SIDE_W-24;
-        if(i==2&&g_logged&&g_tabs[TAB_FOLLOWED].state==LS_READY){
+        if(i==2&&g_tabs[TAB_FOLLOWED].state==LS_READY){
             char n[16];snprintf(n,sizeof(n),"%d",g_tabs[TAB_FOLLOWED].count);
             int nw=ui_text_w(0.8f,n);
             ui_text(SIDE_X+SIDE_W-nw-10,y+33,C_WHITE,0.8f,n);label_w-=nw+12;
@@ -1080,7 +1125,7 @@ static void play_selected(void)
         modal_message(vt_msg("Reproduccion detenida"), err);
     /* viewer counts / thumbnails are stale after watching */
     tab_load(g_tab);
-    if(g_tab!=TAB_FOLLOWED&&g_follow_offline==2)tab_load(TAB_FOLLOWED);
+    if(g_tab!=TAB_FOLLOWED)tab_load(TAB_FOLLOWED);
 
 
 
@@ -1626,7 +1671,7 @@ static void profile_screen(const twitch_stream_t *s)
     snprintf(follow.user_id,sizeof(follow.user_id),"%s",g_logged?g_auth.user_id:"");
     int follow_busy=follow.oauth[0]&&task_start(&follow_task,twitch_follow_run,&follow)==0;
     int known=account_follow_known(s->login);
-    int follow_state=known?1:-1,follow_status=follow_busy?2:known?TW_FOLLOW_ALREADY:follow.oauth[0]?4:1;
+    int follow_state=known?1:-1,follow_status=follow_busy?2:known?TW_FOLLOW_ALREADY:0;
     int followers=-1;char created[32]="",started[32]="",avatar[192]="";
     int loading=task_start(&task,profile_run,&job)==0,selected=s->live?0:1,armed=0;
     const int x=92,y=32,w=776,h=480,bx=x+24,by=y+302,bw=w-48,rh=39;
@@ -1637,20 +1682,18 @@ static void profile_screen(const twitch_stream_t *s)
         if(!(g_in.held&(g_btn_ok|g_btn_back|SCE_CTRL_START))&&!g_in.touch_down)armed=1;
         if(armed&&(g_in.pressed&(g_btn_back|SCE_CTRL_START)))break;
         int choose=armed&&(g_in.pressed&g_btn_ok);
-        if(g_in.pressed&SCE_CTRL_UP)selected=(selected+3)%4;
-        if(g_in.pressed&SCE_CTRL_DOWN)selected=(selected+1)%4;
-        for(int i=0;i<4;i++)if(armed&&ui_touch_hit(&g_in,bx,by+i*rh,bw,rh-3)){selected=i;choose=1;break;}
+        if(g_in.pressed&SCE_CTRL_UP)selected=(selected+2)%3;
+        if(g_in.pressed&SCE_CTRL_DOWN)selected=(selected+1)%3;
+        for(int i=0;i<3;i++)if(armed&&ui_touch_hit(&g_in,bx,by+i*rh,bw,rh-3)){selected=i;choose=1;break;}
         if(choose){
             if(selected==0&&(s->live||saved_has(s->login))&&!follow_busy){
                 if(loading){task_cancel(&task);task_wait(&task);}
                 play_channel(s->login,s->display,s->title,s->viewers);return;
             }
-            if(selected==3)break;
-            if(selected==2&&!follow_busy){int rc=saved_toggle(s->login,s->display,avatar[0]?avatar:s->avatar);follow_status=rc<0?TW_FOLLOW_LOCAL_ERROR:rc?TW_FOLLOW_LOCAL_SAVED:TW_FOLLOW_LOCAL_REMOVED;armed=0;}
-            if(selected==1&&!follow_busy){
-                if(follow_state==1)follow_status=TW_FOLLOW_ALREADY;
-                else {int rc=saved_ensure(s->login,s->display,avatar[0]?avatar:s->avatar);follow_status=rc>0?TW_FOLLOW_LOCAL_SAVED:TW_FOLLOW_LOCAL_ERROR;}
-                armed=0;
+            if(selected==2)break;
+            if(selected==1){
+                int rc=saved_has(s->login)?saved_toggle(s->login,s->display,avatar[0]?avatar:s->avatar):saved_ensure(s->login,s->display,avatar[0]?avatar:s->avatar);
+                follow_status=rc<0?TW_FOLLOW_LOCAL_ERROR:rc?TW_FOLLOW_LOCAL_SAVED:TW_FOLLOW_LOCAL_REMOVED;armed=0;
             }
         }
         sceKernelPowerTick(SCE_KERNEL_POWER_TICK_DISABLE_AUTO_SUSPEND);
@@ -1668,10 +1711,13 @@ static void profile_screen(const twitch_stream_t *s)
         if(loading)ui_text_fit(x+24,y+187,w-48,C_GREY,.85f,vt_tr(VT_I_LOADING));
         else if(job.bio[0])wrap_text(x+24,y+187,w-48,C_GREY,.82f,job.bio,3);
         if(followers>=0||created[0]||started[0]){snprintf(line,sizeof(line),"%s %d | %s %.10s | %s %.16s UTC",vt_lang_current()==2?"Seguidores":"Followers",followers,vt_lang_current()==2?"Desde":"Since",created,vt_lang_current()==2?"Live desde":"Live since",started);ui_text_fit(x+24,y+251,w-48,C_GREY,.75f,line);}
-        ui_text_fit(x+24,y+270,w-48,C_GREY,.75f,twitch_follow_notice(follow_status));
-        ui_text_fit(x+24,y+294,w-48,C_GREY,.8f,twitch_follow_notice_detail(follow_status)[0]?twitch_follow_notice_detail(follow_status):url);
-        const char *labels[]={vt_tr(VT_I_PLAY),follow_busy?vt_tr(VT_I_LOADING):twitch_follow_label(follow_state,saved_has(s->login)),saved_label(saved_has(s->login)),vt_tr(VT_I_BACK)};
-        for(int i=0;i<4;i++){
+        ui_text_fit(x+24,y+270,w-48,C_GREY,.75f,twitch_follow_notice(follow_state==1?TW_FOLLOW_ALREADY:TW_FOLLOW_LOCAL_SAVED));
+        const char *detail=follow_status==TW_FOLLOW_LOCAL_SAVED?twitch_follow_notice_detail(follow_status):
+            (follow_status==TW_FOLLOW_LOCAL_ERROR||follow_status==TW_FOLLOW_LOCAL_REMOVED)?twitch_follow_notice(follow_status):
+            saved_has(s->login)?twitch_follow_label(0,1):follow_busy?vt_tr(VT_I_LOADING):follow_state==1?twitch_follow_notice_detail(TW_FOLLOW_ALREADY):"";
+        ui_text_fit(x+24,y+294,w-48,C_GREY,.8f,detail);
+        const char *labels[]={vt_tr(VT_I_PLAY),saved_label(saved_has(s->login)),vt_tr(VT_I_BACK)};
+        for(int i=0;i<3;i++){
             int yy=by+i*rh;ui_round_rect(bx,yy,bw,rh-3,5,selected==i?CLASSIC_PURPLE:CLASSIC_TILE);
             ui_text_fit(bx+14,yy+26,bw-28,i==0&&!s->live&&!saved_has(s->login)?C_DIM:C_WHITE,.93f,labels[i]);
         }
@@ -1679,7 +1725,7 @@ static void profile_screen(const twitch_stream_t *s)
     }
     if(loading){task_cancel(&task);task_wait(&task);}
     if(follow_busy){task_cancel(&follow_task);while(!task_done(&follow_task))sceKernelDelayThread(10000);}
-    if(g_logged||g_follow_offline==2)tab_load(TAB_FOLLOWED);
+    tab_load(TAB_FOLLOWED);
 }
 static void profile_selected(void)
 {
@@ -1822,7 +1868,7 @@ static void tv_activate(int i){
     switch(i){
     case 0:g_tv_home=1;g_game_filter[0]=g_game_id[0]=g_game_slug[0]=0;home_switch(TAB_EXPLORE);if(g_tabs[TAB_FOLLOWED].state==LS_EMPTY)tab_load(TAB_FOLLOWED);break;
     case 1:g_tv_home=0;home_switch(TAB_FOLLOWED);break;
-    case 2:g_tv_home=0;games_screen();break;
+    case 2:g_tv_home=0;g_game_filter[0]=g_game_id[0]=g_game_slug[0]=0;home_switch(TAB_EXPLORE);games_screen();break;
     case 3:g_tv_home=0;home_switch(TAB_SEARCH);break;
     case 4:account_screen();g_tv_nav_focus=1;break;
     case 5:extras_menu();g_tv_nav_focus=1;break;
@@ -1832,7 +1878,7 @@ static void tv_input(void){
     unsigned p=g_in.pressed;tab_t *tb=&g_tabs[g_tab];
     if(p&SCE_CTRL_SELECT){extras_menu();return;}
     if(p&SCE_CTRL_START){if(!g_tv_nav_focus)profile_selected();return;}
-    if(p&(SCE_CTRL_LTRIGGER|SCE_CTRL_RTRIGGER)){g_tv_nav=(g_tv_nav+(p&SCE_CTRL_RTRIGGER?1:5))%6;g_tv_nav_focus=1;return;}
+    if(p&(SCE_CTRL_LTRIGGER|SCE_CTRL_RTRIGGER)){int next=(g_tv_nav+(p&SCE_CTRL_RTRIGGER?1:5))%6;tv_activate(next);return;}
     if(g_in.touch_tap){
         for(int i=0;i<6;i++)if(ui_touch_hit(&g_in,115+i*139,0,139,54)){tv_activate(i);return;}
         if(ui_touch_hit(&g_in,397,g_tab==TAB_SEARCH?234:197,170,30)&&!g_tv_nav_focus){open_selected();return;}
@@ -1844,7 +1890,7 @@ static void tv_input(void){
         if(ui_touch_hit(&g_in,SCREEN_W-180,FOOTER_Y,180,SCREEN_H-FOOTER_Y)){profile_selected();return;}
     }
     if(p&SCE_CTRL_TRIANGLE){img_clear();tab_load(g_tab);return;}
-    if(p&SCE_CTRL_SQUARE&&g_tab==TAB_FOLLOWED){g_follow_offline=(g_follow_offline+1)%3;settings_save();tb->state=LS_EMPTY;tb->count=0;tab_load(g_tab);return;}
+    if(p&SCE_CTRL_SQUARE&&g_tab==TAB_FOLLOWED){g_follow_offline=(g_follow_offline+1)%3;settings_save();following_rebuild();tab_load(g_tab);return;}
     if(g_tv_nav_focus){
         if(p&SCE_CTRL_LEFT)g_tv_nav=(g_tv_nav+5)%6;
         if(p&SCE_CTRL_RIGHT)g_tv_nav=(g_tv_nav+1)%6;
@@ -1884,6 +1930,7 @@ int main(void)
             g_auth_checking = 1;
     }
     tab_load(g_tab);
+    if(g_tab!=TAB_FOLLOWED)tab_load(TAB_FOLLOWED);
     if (g_tab != TAB_EXPLORE)
         tab_load(TAB_EXPLORE);
     if (g_search[0])
@@ -1941,7 +1988,7 @@ int main(void)
             img_clear(); /* thumbnails are refreshed by Twitch every few minutes */
             tab_load(g_tab);
         }
-        if(g_tab==TAB_FOLLOWED&&(p&SCE_CTRL_SQUARE)){g_follow_offline=(g_follow_offline+1)%3;settings_save();tb->state=LS_EMPTY;tb->count=0;tab_load(TAB_FOLLOWED);continue;}
+        if(g_tab==TAB_FOLLOWED&&(p&SCE_CTRL_SQUARE)){g_follow_offline=(g_follow_offline+1)%3;settings_save();following_rebuild();tab_load(TAB_FOLLOWED);continue;}
         if (g_tab == TAB_SEARCH && (p & SCE_CTRL_SQUARE) && g_search[0]) {
             char login[32];
             if (twitch_sanitize_login(g_search, login, sizeof(login)) >= 3)

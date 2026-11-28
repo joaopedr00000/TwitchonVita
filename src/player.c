@@ -911,10 +911,14 @@ static void draw_view(const vslot_t *frame, view_t *vw)
                 s+=best;while(*s==' '||*s=='\n')s++;
             }
         }
-        ui_text_fit(x+24,y+270,w-48,C_GREY,.75f,twitch_follow_notice(vw->follow_status));
-        ui_text_fit(x+24,y+294,w-48,C_GREY,.8f,twitch_follow_notice_detail(vw->follow_status)[0]?twitch_follow_notice_detail(vw->follow_status):vw->profile_url);
-        const char *labels[]={vw->follow_busy?vt_tr(VT_I_LOADING):twitch_follow_label(vw->follow_state,vw->pp->saved_has&&vw->pp->saved_has(vw->pp->login)),vw->pp->saved_label?vw->pp->saved_label(vw->pp->saved_has&&vw->pp->saved_has(vw->pp->login)):"Save on Vita",vt_tr(VT_I_BACK)};
-        for(int i=0;i<3;i++){
+        ui_text_fit(x+24,y+270,w-48,C_GREY,.75f,twitch_follow_notice(vw->follow_state==1?TW_FOLLOW_ALREADY:TW_FOLLOW_LOCAL_SAVED));
+        int saved=vw->pp->saved_has&&vw->pp->saved_has(vw->pp->login);
+        const char *detail=vw->follow_status==TW_FOLLOW_LOCAL_SAVED?twitch_follow_notice_detail(vw->follow_status):
+            (vw->follow_status==TW_FOLLOW_LOCAL_ERROR||vw->follow_status==TW_FOLLOW_LOCAL_REMOVED)?twitch_follow_notice(vw->follow_status):
+            saved?twitch_follow_label(0,1):vw->follow_busy?vt_tr(VT_I_LOADING):vw->follow_state==1?twitch_follow_notice_detail(TW_FOLLOW_ALREADY):"";
+        ui_text_fit(x+24,y+294,w-48,C_GREY,.8f,detail);
+        const char *labels[]={vw->pp->saved_label?vw->pp->saved_label(saved):"Save on Vita",vt_tr(VT_I_BACK)};
+        for(int i=0;i<2;i++){
             int yy=y+310+i*44;ui_round_rect(x+24,yy,w-48,41,5,i==vw->profile_sel?C_PURPLE:C_PANEL);
             ui_text_fit(x+38,yy+26,w-76,C_WHITE,.93f,labels[i]);
         }
@@ -1127,15 +1131,16 @@ int player_run(const player_params_t *pp, char *err, int errlen)
             int choose=!!(pressed&accept);
             if(pressed&(pp->btn_back|SCE_CTRL_START|SCE_CTRL_SELECT)){view.profile_open=0;choose=0;}
             else {
-                if(pressed&SCE_CTRL_UP)view.profile_sel=(view.profile_sel+2)%3;
-                if(pressed&SCE_CTRL_DOWN)view.profile_sel=(view.profile_sel+1)%3;
-                for(int i=0;i<3;i++)if(ui_touch_hit(&input,116,342+i*44,728,41)){view.profile_sel=i;choose=1;break;}
+                if(pressed&SCE_CTRL_UP)view.profile_sel=(view.profile_sel+1)%2;
+                if(pressed&SCE_CTRL_DOWN)view.profile_sel=(view.profile_sel+1)%2;
+                for(int i=0;i<2;i++)if(ui_touch_hit(&input,116,342+i*44,728,41)){view.profile_sel=i;choose=1;break;}
                 if(choose){
-                    if(view.profile_sel==2)view.profile_open=0;
-                    else if(!view.follow_busy&&view.profile_sel==1&&pp->saved_toggle){int rc=pp->saved_toggle(pp->login,pp->channel,follow_job.avatar[0]?follow_job.avatar:pp->profile_avatar);view.follow_status=rc<0?TW_FOLLOW_LOCAL_ERROR:rc?TW_FOLLOW_LOCAL_SAVED:TW_FOLLOW_LOCAL_REMOVED;}
-                    else if(!view.follow_busy&&view.profile_sel==0){
-                        if(view.follow_state==1)view.follow_status=TW_FOLLOW_ALREADY;
-                        else {int rc=pp->saved_ensure?pp->saved_ensure(pp->login,pp->channel,follow_job.avatar[0]?follow_job.avatar:pp->profile_avatar):-1;view.follow_status=rc>0?TW_FOLLOW_LOCAL_SAVED:TW_FOLLOW_LOCAL_ERROR;}
+                    if(view.profile_sel==1)view.profile_open=0;
+                    else if(view.profile_sel==0){
+                        int saved=pp->saved_has&&pp->saved_has(pp->login);
+                        const char *avatar=follow_job.avatar[0]?follow_job.avatar:pp->profile_avatar;
+                        int rc=saved?(pp->saved_toggle?pp->saved_toggle(pp->login,pp->channel,avatar):-1):(pp->saved_ensure?pp->saved_ensure(pp->login,pp->channel,avatar):-1);
+                        view.follow_status=rc<0?TW_FOLLOW_LOCAL_ERROR:rc?TW_FOLLOW_LOCAL_SAVED:TW_FOLLOW_LOCAL_REMOVED;
                     }
                 }
             }
