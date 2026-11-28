@@ -1052,7 +1052,7 @@ int player_run(const player_params_t *pp, char *err, int errlen)
         goto out_queues;
     }
     LOGI("startup: start HLS thread");
-    int hls_rc=pp->preview_playlist?hls_start_preview(&pl->hls,pp->preview_playlist,&pl->vq,&pl->aq,pp->start_seconds):pp->recorded?hls_start_recorded(&pl->hls,pp->url,&pl->vq,&pl->aq,pp->start_seconds):hls_start_capture(&pl->hls,pp->url,&pl->vq,&pl->aq,vt_profile_edge(pp->profile),pp->login,pp->chat_oauth,pp->width,pp->height,pp->fps,pp->ad_backup_url,pp->live_capture);
+    int hls_rc=pp->preview_playlist?hls_start_preview(&pl->hls,pp->preview_playlist,&pl->vq,&pl->aq,pp->start_seconds):pp->recorded==2?hls_start_clip(&pl->hls,pp->url,&pl->vq,&pl->aq,pp->duration_seconds):pp->recorded?hls_start_recorded(&pl->hls,pp->url,&pl->vq,&pl->aq,pp->start_seconds):hls_start_capture(&pl->hls,pp->url,&pl->vq,&pl->aq,vt_profile_edge(pp->profile),pp->login,pp->chat_oauth,pp->width,pp->height,pp->fps,pp->ad_backup_url,pp->live_capture);
     if(hls_rc<0){
         snprintf(err, (size_t)errlen, vt_msg("No se pudo crear el hilo de descarga"));
         LOGE("%s", err);

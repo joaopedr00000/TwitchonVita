@@ -49,6 +49,7 @@ int mp4_demux_set_init(mp4_demux_t *d, const uint8_t *data, size_t len);
 /* Parses one media segment (styp/sidx/moof/mdat...). Returns <0 if the
  * callback aborted or the init segment is missing. */
 int mp4_demux_feed(mp4_demux_t *d, const uint8_t *data, size_t len);
+int mp4_demux_file(mp4_demux_t *d,const uint8_t *data,size_t len);
 void mp4_demux_discontinuity(mp4_demux_t *d);
 
 /* 1 if the bytes look like an MP4 segment (box header), 0 for MPEG-TS. */

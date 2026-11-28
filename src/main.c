@@ -45,7 +45,7 @@ int _newlib_heap_size_user = 96 * 1024 * 1024;
 #define SETTINGS_FILE DATA_DIR "/settings.txt"
 #define LOG_FILE      DATA_DIR "/log.txt"
 #define LOG_PREV_FILE DATA_DIR "/log_prev.txt"
-#define APP_VERSION   "1.34-catalog-tls-test16"
+#define APP_VERSION   "1.34-media-playback-test17"
 
 #define MAX_ITEMS 100
 
@@ -852,11 +852,13 @@ static void tv_tile(const twitch_stream_t *s,int x,int y,int active){
 static void tv_row(int tab,int y,const char *label){
     tab_t *tb=&g_tabs[tab];int n=home_count(tb),pos=home_pos(tb);
     /* Following and top rows use their own selection; category filter applies only to Explore. */
-    int first=pos>=0?(pos/4)*4:0;
+    int grid=!g_tv_home&&tab==TAB_EXPLORE&&!g_game_id[0]&&!g_game_filter[0];
+    int slots=grid?8:4;
+    int first=pos>=0?(pos/slots)*slots:0;
     ui_text_fit(20,y-12,800,C_WHITE,.98f,label);
     if(!n){if(tb->busy||tb->state==LS_LOADING)ui_spinner(36,y+37,9,C_PURPLE);else ui_text_fit(20,y+40,900,C_GREY,.84f,tb->need_login?vt_tr(VT_I_ACCOUNT):tb->state==LS_ERROR?tb->err:vt_msg("Sin resultados"));return;}
-    for(int k=0;k<4&&first+k<n;k++){int idx=home_index(tb,first+k);if(idx>=0)tv_tile(&tb->items[idx],20+k*233,y,!g_tv_nav_focus&&g_tab==tab&&idx==tb->sel);}
-    if(first+4<n)img_prefetch(tb->items[home_index(tb,first+4)].preview);
+    for(int k=0;k<slots&&first+k<n;k++){int idx=home_index(tb,first+k);if(idx>=0)tv_tile(&tb->items[idx],20+(k%4)*233,y+(k/4)*113,!g_tv_nav_focus&&g_tab==tab&&idx==tb->sel);}
+    if(first+slots<n)img_prefetch(tb->items[home_index(tb,first+slots)].preview);
     char page[32];snprintf(page,sizeof(page),"%d/%d",pos>=0?pos+1:1,n);ui_text_fit(864,y-12,77,C_GREY,.76f,page);
 }
 static void draw_tv_home(void){
@@ -897,7 +899,7 @@ static void draw_tv_home(void){
         tv_row(TAB_EXPLORE,402,vt_lang_current()==2?"Canais ao vivo populares":vt_lang_current()==1?"Canales en directo populares":"Top live channels");
     }else{
         tv_row(g_tab,289,g_tab==TAB_FOLLOWED?following_mode():g_tab==TAB_SEARCH?vt_tr(VT_I_SEARCH):g_game_filter[0]?g_game_filter:channels_label());
-        ui_text_fit(20,425,920,C_GREY,.9f,vt_lang_current()==2?"Use esquerda/direita para navegar • START para perfil":"Use left/right to browse • START for profile");
+        if(g_tab!=TAB_EXPLORE||g_game_id[0]||g_game_filter[0])ui_text_fit(20,425,920,C_GREY,.9f,vt_lang_current()==2?"Use esquerda/direita para navegar • START para perfil":"Use left/right to browse • START for profile");
     }
     draw_footer();
     if(g_toast[0]&&sceKernelGetProcessTimeWide()<g_toast_until){ui_round_rect(100,218,760,37,5,C_PANEL2);ui_text_fit(116,243,728,C_WHITE,.9f,g_toast);}
@@ -1930,9 +1932,23 @@ static void clip_dialog(const char *login,const twitch_media_t *v,int pos,const 
     else if(j.id[0])modal_message(vt_lang_current()==2?"Clipe ainda não confirmado":"Clip not confirmed",j.url);
     else if(rc==0)modal_message("Clips",j.error[0]?j.error:"Clip failed");
 }
+typedef struct {char id[80],url[M3U8_URL_MAX],err[192];int height,rc;} clip_mp4_job_t;
+static int clip_mp4_job_run(void *arg,volatile int *abort_flag){clip_mp4_job_t *j=arg;j->rc=twitch_clip_mp4(j->id,j->url,sizeof(j->url),&j->height,j->err,sizeof(j->err),abort_flag);return j->rc;}
+static int play_clip_mp4(const twitch_media_t *v){
+    static clip_mp4_job_t j;memset(&j,0,sizeof(j));j.rc=-1;snprintf(j.id,sizeof(j.id),"%s",v->id);
+    task_t task={0};if(run_with_spinner(&task,clip_mp4_job_run,&j,"Clip MP4...")<0)return 0;
+    if(j.rc<0)return -1;
+    player_params_t pp={0};char err[192]="";int pos=0;
+    pp.recorded=2;pp.duration_seconds=v->seconds>0?v->seconds:60;pp.preview_end=pp.duration_seconds+1;pp.position_seconds=&pos;
+    pp.url=j.url;pp.channel=v->channel;pp.title=v->title;pp.quality="MP4";pp.height=j.height;pp.width=(j.height*16/9+1)&~1;pp.fps=30;
+    pp.font=ui_font;pp.btn_back=g_btn_back;pp.profile=g_profile;pp.volume=&g_volume;
+    scePowerSetArmClockFrequency(vt_profile_clock(g_profile,pp.height,pp.fps));int rc=player_run(&pp,err,sizeof(err));scePowerSetArmClockFrequency(333);
+    if(rc<0||rc==PLAYER_RECONNECT){modal_message("Clip",err[0]?err:"MP4 playback failed");return -1;}return 0;
+}
 static void recorded_play(const twitch_media_t *v){
     if(!strcmp(v->type,"clip")){
-        if(!v->vod_id[0]||v->offset<0||v->seconds<1||v->offset>604800-v->seconds){modal_message("Clip",vt_lang_current()==2?"Sem gravação de origem disponível; reprodução MP4 direta ainda não suportada.":"Source VOD unavailable; direct MP4 playback not supported yet.");return;}
+        if(play_clip_mp4(v)==0)return;
+        if(!v->vod_id[0]||v->offset<0||v->seconds<1||v->offset>604800-v->seconds){modal_message("Clip",vt_lang_current()==2?"MP4 indisponível e sem gravação de origem.":"MP4 unavailable; no source VOD.");return;}
         static vod_job_t clip_job;memset(&clip_job,0,sizeof(clip_job));snprintf(clip_job.id,sizeof(clip_job.id),"%s",v->vod_id);snprintf(clip_job.oauth,sizeof(clip_job.oauth),"%s",g_logged?g_auth.access:"");
         task_t ct={0};if(run_with_spinner(&ct,vod_job_run,&clip_job,vt_lang_current()==2?"Carregando clipe pela gravação...":"Loading clip from source VOD...")<0)return;
         m3u8_variant_t *options[M3U8_MAX_VARIANTS];int cn=0;
@@ -2302,9 +2318,10 @@ static void tv_input(void){
         for(int i=0;i<TV_NAV_COUNT;i++)if(ui_touch_hit(&g_in,TV_NAV_X+i*TV_NAV_STEP,0,TV_NAV_STEP,54)){tv_activate(i);return;}
         if(ui_touch_hit(&g_in,397,g_tab==TAB_SEARCH?234:197,170,30)&&!g_tv_nav_focus){open_selected();return;}
         if(g_tab==TAB_SEARCH&&ui_touch_hit(&g_in,20,60,920,35)){tb->sel=-1;g_tv_nav_focus=0;open_selected();return;}
+        int grid=!g_tv_home&&g_tab==TAB_EXPLORE&&!g_game_id[0]&&!g_game_filter[0];
         for(int row=0;row<(g_tv_home?2:1);row++){
-            int t=g_tv_home?(row?TAB_EXPLORE:TAB_FOLLOWED):g_tab;tab_t *r=&g_tabs[t];int n=home_count(r),pos=home_pos(r),first=pos>=0?pos/4*4:0;
-            for(int k=0;k<4&&first+k<n;k++)if(ui_touch_hit(&g_in,20+k*233,289+row*113,222,105)){g_tab=t;g_side_focus=-1;g_tv_nav_focus=0;r->sel=home_index(r,first+k);open_selected();return;}
+            int t=g_tv_home?(row?TAB_EXPLORE:TAB_FOLLOWED):g_tab;tab_t *r=&g_tabs[t];int n=home_count(r),pos=home_pos(r),slots=grid?8:4,first=pos>=0?pos/slots*slots:0;
+            for(int k=0;k<slots&&first+k<n;k++)if(ui_touch_hit(&g_in,20+(k%4)*233,289+(row+k/4)*113,222,105)){g_tab=t;g_side_focus=-1;g_tv_nav_focus=0;r->sel=home_index(r,first+k);open_selected();return;}
         }
         if(ui_touch_hit(&g_in,SCREEN_W-180,FOOTER_Y,180,SCREEN_H-FOOTER_Y)){profile_selected();return;}
     }
@@ -2317,6 +2334,13 @@ static void tv_input(void){
         if(p&SCE_CTRL_DOWN){g_tv_nav_focus=0;return;}return;
     }
     if(p&g_btn_back){g_tv_nav_focus=1;return;}
+    int grid=!g_tv_home&&g_tab==TAB_EXPLORE&&!g_game_id[0]&&!g_game_filter[0];
+    if(grid&&(p&(SCE_CTRL_UP|SCE_CTRL_DOWN))){
+        int pos=home_pos(tb),n=home_count(tb);
+        if((p&SCE_CTRL_DOWN)&&pos>=0&&pos+4<n){tb->sel=home_index(tb,pos+4);return;}
+        if((p&SCE_CTRL_UP)&&pos>=0&&pos%8>=4){tb->sel=home_index(tb,pos-4);return;}
+        if(p&SCE_CTRL_DOWN)return;
+    }
     if(p&SCE_CTRL_UP){
         if(g_tv_home&&g_tab==TAB_EXPLORE){g_tab=TAB_FOLLOWED;return;}
         if(g_tab==TAB_SEARCH&&tb->sel>=0){tb->sel=-1;return;}

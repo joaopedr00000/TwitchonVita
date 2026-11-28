@@ -1078,13 +1078,41 @@ int twitch_vod_variants(const char *id,const char *oauth,m3u8_variant_t *out,int
     int len=et&&es?snprintf(url,sizeof(url),"https://usher.ttvnw.net/vod/%s.m3u8?allow_source=true&allow_audio_only=false&supported_codecs=h264&nauth=%s&nauthsig=%s&player=twitchweb",id,et,es):-1;
     curl_free(et);curl_free(es);json_free(root);
     if(len<0||(size_t)len>=sizeof(url))goto done;
-    if(trust!=CURLE_OK){snprintf(err,errlen,"VOD TLS setup failed (%d)",(int)trust);goto done;}
-    net=http_request(c,url,NULL,NULL,&b,&status,abort_flag);if(net<0||status!=200){snprintf(err,errlen,"VOD playlist HTTP %ld curl %d",status,-net);goto done;}
+    net=http_media_get(c,(int)trust,url,&b,&status,abort_flag);if(net<0||status!=200){snprintf(err,errlen,"VOD playlist HTTP %ld curl %d",status,-net);goto done;}
     n=m3u8_parse_master((const char*)b.data,out,max);
     if(n<=0)n=-1;
 done:
     if(n<0&&!err[0])snprintf(err,errlen,"VOD unavailable / Vídeo indisponível (HTTP %ld)",status);
     curl_slist_free_all(h);buf_free(&b);http_free(c);return n;
+}
+int twitch_clip_mp4(const char *id,char *url,size_t cap,int *height,char *err,size_t errlen,volatile int *abort_flag){
+    if(!clip_id_ok(id))return -1;
+    char body[512];snprintf(body,sizeof(body),"{\"query\":\"query { clip(slug: \\\"%s\\\") { videoQualities { quality sourceURL } playbackAccessToken { value signature } } }\"}",id);
+    buf_t b={0};long status=0;int rc=-1;
+    CURL *c=http_new();if(!c)return -1;
+    CURLcode trust=vt_tls_configure(c);curl_easy_setopt(c,CURLOPT_FOLLOWLOCATION,0L);
+    struct curl_slist *h=curl_slist_append(NULL,"Client-ID: " TWITCH_CLIENT_ID),*next=h?curl_slist_append(h,"Content-Type: text/plain;charset=UTF-8"):NULL;
+    if(!next)goto done_clip;h=next;
+    int net=trust==CURLE_OK?http_request(c,"https://gql.twitch.tv/gql",body,h,&b,&status,abort_flag):-(int)trust;
+    if((trust!=CURLE_OK||net==-CURLE_SSL_CACERT_BADFILE)&&!status&&!(abort_flag&&*abort_flag))net=http_native_read("https://gql.twitch.tv/gql",body,NULL,1,&b,&status,abort_flag);
+    if(net||status!=200)goto done_clip;
+    json_t *root=json_parse((const char*)b.data),*arr=json_path(root,"data.clip.videoQualities");
+    const char *token=json_str(root,"data.clip.playbackAccessToken.value",""),*sig=json_str(root,"data.clip.playbackAccessToken.signature","");
+    const char *src=NULL;int best=0;
+    if(arr&&arr->type==JSON_ARRAY)for(json_t *j=arr->child;j;j=j->next){
+        int q=atoi(json_str(j,"quality",""));const char *s=json_str(j,"sourceURL","");
+        if(q<160||q>480||strncmp(s,"https://",8)||strpbrk(s,"\r\n"))continue;
+        if(!src||(q<=360&&(best>360||q>best))||(q>360&&best>360&&q<best)){src=s;best=q;}
+    }
+    if(src&&*token&&*sig){
+        char *et=curl_easy_escape(c,token,0),*es=curl_easy_escape(c,sig,0);
+        if(et&&es){int n=snprintf(url,cap,"%s%c%s%s%s%s",src,strchr(src,'?')?'&':'?',"sig=",es,"&token=",et);if(n>0&&(size_t)n<cap){*height=best;rc=0;}}
+        curl_free(et);curl_free(es);
+    }
+    json_free(root);
+done_clip:
+    if(rc<0)snprintf(err,errlen,"Clip MP4 unavailable (HTTP %ld)",status);
+    curl_slist_free_all(h);buf_free(&b);http_free(c);return rc;
 }
 int twitch_create_clip(void *arg,volatile int *abort_flag){
     twitch_clip_job_t *j=arg;buf_t b={0};long status=0;char url[1024];

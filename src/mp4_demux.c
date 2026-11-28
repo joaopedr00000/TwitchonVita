@@ -426,3 +426,79 @@ void mp4_demux_free(mp4_demux_t *d)
     buf_free(&d->au);
     d->ready = 0;
 }
+
+/* Bounded conventional MP4 sample-table reader for short clips. Interleave
+ * by decode time to avoid filling one player queue while starving the other. */
+typedef struct {
+    mp4_track_t *track;
+    box_t stsz,stsc,stco,stts,ctts,stss;
+    uint32_t count,idx,chunk,in_chunk,sc,ts,ts_left,ct,ct_left,sync;
+    uint32_t fixed,chunks,co64;
+    uint64_t off;
+    int64_t dt;
+} flat_track_t;
+static int flat_table(const box_t *stbl,const char *name,box_t *b,size_t stride){
+    if(find_box(stbl->p,stbl->len,name,b)<0||b->len<8)return -1;
+    return rd32(b->p+4)<=(b->len-8)/stride?0:-1;
+}
+static uint32_t flat_val(const box_t *b,uint32_t i,size_t stride,size_t col){return rd32(b->p+8+(size_t)i*stride+col);}
+static int flat_chunk(flat_track_t *t){
+    if(t->chunk>=t->chunks)return -1;
+    uint32_t n=rd32(t->stsc.p+4);
+    while(t->sc+1<n&&flat_val(&t->stsc,t->sc+1,12,0)<=t->chunk+1)t->sc++;
+    if(!n||flat_val(&t->stsc,t->sc,12,0)>t->chunk+1||flat_val(&t->stsc,t->sc,12,8)!=1)return -1;
+    t->in_chunk=flat_val(&t->stsc,t->sc,12,4);
+    if(!t->in_chunk)return -1;
+    t->off=t->co64?rd64(t->stco.p+8+(size_t)t->chunk*8):flat_val(&t->stco,t->chunk,4,0);
+    return 0;
+}
+static int flat_init(flat_track_t *t,mp4_demux_t *d,const box_t *trak){
+    box_t tk,mdia,minf,stbl;
+    memset(t,0,sizeof(*t));
+    if(find_box(trak->p,trak->len,"tkhd",&tk)<0||tk.len<24)return -1;
+    t->track=track_by_id(d,rd32(tk.p+(tk.p[0]==1?20:12)));
+    if(!t->track)return 1;
+    if(find_box(trak->p,trak->len,"mdia",&mdia)<0||find_box(mdia.p,mdia.len,"minf",&minf)<0||find_box(minf.p,minf.len,"stbl",&stbl)<0)return -1;
+    if(find_box(stbl.p,stbl.len,"stsz",&t->stsz)<0||t->stsz.len<12)return -1;
+    t->fixed=rd32(t->stsz.p+4);t->count=rd32(t->stsz.p+8);
+    if(!t->count||t->count>20000||(!t->fixed&&t->count>(t->stsz.len-12)/4))return -1;
+    if(flat_table(&stbl,"stsc",&t->stsc,12)<0||flat_table(&stbl,"stts",&t->stts,8)<0)return -1;
+    if(flat_table(&stbl,"stco",&t->stco,4)<0){if(flat_table(&stbl,"co64",&t->stco,8)<0)return -1;t->co64=1;}
+    t->chunks=rd32(t->stco.p+4);
+    if(flat_table(&stbl,"ctts",&t->ctts,8)<0)memset(&t->ctts,0,sizeof(t->ctts));
+    if(flat_table(&stbl,"stss",&t->stss,4)<0)memset(&t->stss,0,sizeof(t->stss));
+    return flat_chunk(t);
+}
+static int flat_emit(mp4_demux_t *d,flat_track_t *t,const uint8_t *data,size_t len){
+    uint32_t size=t->fixed?t->fixed:rd32(t->stsz.p+12+(size_t)t->idx*4);
+    if(!size||t->off>len||size>len-t->off)return -1;
+    if(!t->ts_left){if(t->ts>=rd32(t->stts.p+4))return -1;t->ts_left=flat_val(&t->stts,t->ts,8,0);if(!t->ts_left)return -1;}
+    int64_t comp=0;
+    if(t->ctts.p){if(!t->ct_left){if(t->ct>=rd32(t->ctts.p+4))return -1;t->ct_left=flat_val(&t->ctts,t->ct,8,0);if(!t->ct_left)return -1;}
+        uint32_t v=flat_val(&t->ctts,t->ct,8,4);comp=t->ctts.p[0]==1?(int64_t)(int32_t)v:(int64_t)v;if(!--t->ct_left)t->ct++;}
+    int sync=!t->stss.p;
+    if(t->stss.p&&t->sync<rd32(t->stss.p+4)&&flat_val(&t->stss,t->sync,4,0)==t->idx+1){sync=1;t->sync++;}
+    int64_t pts=to90k(t->dt+comp,t->track->timescale),dts=to90k(t->dt,t->track->timescale);
+    int rc=t->track->is_video?emit_video(d,data+(size_t)t->off,size,sync,pts,dts):emit_audio(d,data+(size_t)t->off,size,pts);
+    if(rc<0)return -1;
+    t->dt+=flat_val(&t->stts,t->ts,8,4);if(!--t->ts_left)t->ts++;
+    t->idx++;t->off+=size;if(!--t->in_chunk&&t->idx<t->count){t->chunk++;if(flat_chunk(t)<0)return -1;}
+    return 0;
+}
+int mp4_demux_file(mp4_demux_t *d,const uint8_t *data,size_t len){
+    box_t moov,b;size_t pos=0;flat_track_t tracks[4];int n=0,video=0;
+    if(mp4_demux_set_init(d,data,len)<0||find_box(data,len,"moov",&moov)<0)return -1;
+    if(find_box(moov.p,moov.len,"mvex",&b)==0)return mp4_demux_feed(d,data,len);
+    while(next_box(moov.p,moov.len,&pos,&b)==0)if(!memcmp(b.type,"trak",4)){
+        if(n>=4)return -1;
+        int rc=flat_init(&tracks[n],d,&b);if(rc<0)return -1;if(rc>0)continue;
+        if(tracks[n].track->is_video&&d->ps.size)video=1;n++;
+    }
+    if(!video)return -1;
+    for(;;){
+        int k=-1;int64_t best=0;
+        for(int i=0;i<n;i++)if(tracks[i].idx<tracks[i].count){int64_t ts=to90k(tracks[i].dt,tracks[i].track->timescale);if(k<0||ts<best){k=i;best=ts;}}
+        if(k<0)return 0;
+        if(flat_emit(d,&tracks[k],data,len)<0)return -1;
+    }
+}

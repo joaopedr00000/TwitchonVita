@@ -113,17 +113,26 @@ static void *hls_thread(void *argp)
     unsigned long long last_new = sceKernelGetProcessTimeWide();
     long status = 0;
 
-    if(c&&h->recorded&&vt_tls_configure(c)!=CURLE_OK){http_free(c);c=NULL;}
+    int trust=c&&h->recorded?(int)vt_tls_configure(c):CURLE_OK;
+    if(c&&h->recorded)curl_easy_setopt(c,CURLOPT_FOLLOWLOCATION,0L);
     if (!c) {
         snprintf(h->error, sizeof(h->error), vt_msg("No se pudo iniciar curl"));
         h->finished = 1;
         return NULL;
     }
 
+    if(h->recorded==2){
+        int rc=http_media_get(c,trust,h->url,&seg,&status,&h->abort_req);
+        if(rc||status!=200){snprintf(h->error,sizeof(h->error),"Clip MP4 HTTP %ld curl %d",status,-rc);goto done;}
+        h->actual_start=0;h->duration_seconds=h->start_seconds;h->position_ready=1;
+        if(mp4_demux_file(&h->mp4,seg.data,seg.size)<0){if(h->running)snprintf(h->error,sizeof(h->error),"Unsupported or incomplete clip MP4");}
+        else h->segments_done=1;
+        goto done;
+    }
     while (h->running) {
         int bad=0;
         media_valid=0;
-        if(!h->preview_playlist&&(!h->recorded||!vod_loaded))bad=http_request(c,h->url,NULL,NULL,&pl,&status,&h->abort_req)<0||status!=200;
+        if(!h->preview_playlist&&(!h->recorded||!vod_loaded))bad=(h->recorded?http_media_get(c,trust,h->url,&pl,&status,&h->abort_req):http_request(c,h->url,NULL,NULL,&pl,&status,&h->abort_req))<0||status!=200;
         const char *playlist=h->preview_playlist?h->preview_playlist:(const char*)pl.data;
         if(!bad)bad=h->recorded?m3u8_parse_vod(playlist,h->url,&media,vod_index,h->start_seconds)<0:m3u8_parse_media(playlist,h->url,&media)<0;
         media_valid=!bad;
@@ -196,7 +205,7 @@ static void *hls_thread(void *argp)
             if (s->map >= 0 && s->map < media.nmap && strcmp(h->map_loaded, media.map_url[s->map])) {
                 int iok = 0;
                 for (int attempt = 0; attempt < 2 && h->running && !iok; attempt++)
-                    iok = http_request(c, media.map_url[s->map], NULL, NULL, &seg, &status, &h->abort_req) == 0 &&
+                    iok = (h->recorded?http_media_get(c,trust,media.map_url[s->map],&seg,&status,&h->abort_req):http_request(c, media.map_url[s->map], NULL, NULL, &seg, &status, &h->abort_req)) == 0 &&
                           status == 200;
                 if (iok && mp4_demux_set_init(&h->mp4, seg.data, seg.size) == 0) {
                     if (!h->map_loaded[0])
@@ -213,7 +222,7 @@ static void *hls_thread(void *argp)
             int ok = 0;
             unsigned long long t0 = sceKernelGetProcessTimeWide();
             for (int attempt = 0; attempt < 2 && h->running && !ok; attempt++) {
-                if (http_request(c, s->url, NULL, NULL, &seg, &status, &h->abort_req) == 0 &&
+                if ((h->recorded?http_media_get(c,trust,s->url,&seg,&status,&h->abort_req):http_request(c, s->url, NULL, NULL, &seg, &status, &h->abort_req)) == 0 &&
                     status == 200)
                     ok = 1;
             }
@@ -312,6 +321,7 @@ int hls_start_recorded(hls_t *h,const char *url,pktqueue_t *vq,pktqueue_t *aq,in
 
 int hls_start_capture(hls_t *h,const char *url,pktqueue_t *vq,pktqueue_t *aq,int edge,const char *channel,const char *oauth,int width,int height,float fps,char *backup,m3u8_preview_t *capture){return hls_start_mode(h,url,vq,aq,edge,channel,oauth,width,height,fps,backup,0,0,NULL,capture);}
 int hls_start_preview(hls_t *h,const char *playlist,pktqueue_t *vq,pktqueue_t *aq,int start){return hls_start_mode(h,"https://usher.ttvnw.net/",vq,aq,1,NULL,NULL,0,0,0,NULL,1,start,playlist,NULL);}
+int hls_start_clip(hls_t *h,const char *url,pktqueue_t *vq,pktqueue_t *aq,int duration){return hls_start_mode(h,url,vq,aq,1,NULL,NULL,0,0,0,NULL,2,duration,NULL,NULL);}
 void hls_stop(hls_t *h)
 {
     h->running = 0;

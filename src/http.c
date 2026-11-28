@@ -116,9 +116,21 @@ void http_native_lock(void){pthread_mutex_lock(&native_lock);}
 void http_native_unlock(void){pthread_mutex_unlock(&native_lock);}
 #define VT_NATIVE_VERIFY (SCE_HTTPS_FLAG_SERVER_VERIFY | SCE_HTTPS_FLAG_CN_CHECK | SCE_HTTPS_FLAG_NOT_AFTER_CHECK | SCE_HTTPS_FLAG_NOT_BEFORE_CHECK | SCE_HTTPS_FLAG_KNOWN_CA_CHECK)
 int http_native_read(const char *url,const char *body,const char *oauth,int gql,buf_t *out,long *status,volatile int *abort_flag){
-    /* Only the two fixed Twitch API hosts are eligible. Never pass media
-     * URLs or credentials to arbitrary hosts. GraphQL is read-only here. */
-    if(strncmp(url,"https://api.twitch.tv/helix/",sizeof("https://api.twitch.tv/helix/")-1)&&strcmp(url,"https://gql.twitch.tv/gql"))return -CURLE_BAD_FUNCTION_ARGUMENT;
+    /* API credentials are restricted to fixed hosts. CDN requests are anonymous. */
+    int api=!strncmp(url,"https://api.twitch.tv/helix/",sizeof("https://api.twitch.tv/helix/")-1)||!strcmp(url,"https://gql.twitch.tv/gql");
+    if(!api){
+        if(oauth||body||gql||strncmp(url,"https://",8)||strpbrk(url,"\r\n\\")||strlen(url)>16383)return -CURLE_BAD_FUNCTION_ARGUMENT;
+        const char *host=url+8,*end=strchr(host,'/');
+        if(!end||end==host)return -CURLE_BAD_FUNCTION_ARGUMENT;
+        size_t n=(size_t)(end-host);
+        const char *suffixes[]={".ttvnw.net",".twitchcdn.net",".cloudfront.net",".twitch.tv"};
+        int valid=0;
+        for(unsigned i=0;i<sizeof(suffixes)/sizeof(suffixes[0]);i++){
+            size_t k=strlen(suffixes[i]);if(n>k&&!strncmp(end-k,suffixes[i],k))valid=1;
+        }
+        for(const char *p=host;p<end;p++)if(!((*p>='a'&&*p<='z')||(*p>='0'&&*p<='9')||*p=='.'||*p=='-'))valid=0;
+        if(!valid)return -CURLE_BAD_FUNCTION_ARGUMENT;
+    }
     if(oauth&&(strlen(oauth)>100||strpbrk(oauth,"\r\n")))return -CURLE_BAD_FUNCTION_ARGUMENT;
     if(body&&(!gql||strstr(body,"mutation")))return -CURLE_BAD_FUNCTION_ARGUMENT;
     *status=0;buf_reset(out);if(out->data)out->data[0]=0;
@@ -137,15 +149,16 @@ int http_native_read(const char *url,const char *body,const char *oauth,int gql,
     NATIVE(sceHttpSetResponseHeaderMaxSize(tpl,16384));
     stage="connection";NATIVE(conn=sceHttpCreateConnectionWithURL(tpl,url,SCE_HTTP_DISABLE));
     NATIVE(req=sceHttpCreateRequestWithURL(conn,body?SCE_HTTP_METHOD_POST:SCE_HTTP_METHOD_GET,url,body?strlen(body):0));
-    NATIVE(sceHttpAddRequestHeader(req,"Client-Id",TWITCH_CLIENT_ID,SCE_HTTP_HEADER_OVERWRITE));
+    if(api)NATIVE(sceHttpAddRequestHeader(req,"Client-Id",TWITCH_CLIENT_ID,SCE_HTTP_HEADER_OVERWRITE));
     if(oauth&&*oauth){snprintf(auth,sizeof(auth),"%s %s",gql?"OAuth":"Bearer",oauth);NATIVE(sceHttpAddRequestHeader(req,"Authorization",auth,SCE_HTTP_HEADER_OVERWRITE));}
     NATIVE(sceHttpAddRequestHeader(req,"Accept-Encoding","identity",SCE_HTTP_HEADER_OVERWRITE));
     if(body)NATIVE(sceHttpAddRequestHeader(req,"Content-Type","text/plain;charset=UTF-8",SCE_HTTP_HEADER_OVERWRITE));
     stage="send";if(abort_flag&&*abort_flag){rc=-1;goto done;}NATIVE(sceHttpSendRequest(req,body,body?(unsigned)strlen(body):0));
     NATIVE(sceHttpGetStatusCode(req,&code));*status=code;
+    size_t limit=api?2u*1024u*1024u:16u*1024u*1024u;
     stage="read";while(!(abort_flag&&*abort_flag)){
         int n=sceHttpReadData(req,chunk,sizeof(chunk));if(n<0){rc=n;goto done;}if(!n){rc=0;goto done;}
-        if(out->size>2u*1024u*1024u||(size_t)n>2u*1024u*1024u-out->size||buf_append(out,chunk,(size_t)n)<0){rc=-1;goto done;}
+        if(out->size>limit||(size_t)n>limit-out->size||buf_append(out,chunk,(size_t)n)<0){rc=-1;goto done;}
     }rc=-1;
 done:
     if(rc<0){int se=0;unsigned detail=0;if(req>=0)sceHttpsGetSslError(req,&se,&detail);
@@ -156,4 +169,13 @@ done:
     if(!out->data)buf_append(out,"",0);
 #undef NATIVE
     return rc<0?-CURLE_SSL_CONNECT_ERROR:0;
+}
+
+/* No OAuth headers, no insecure retries; native fallback on CA setup/read failure. */
+int http_media_get(CURL *c,int trust,const char *url,buf_t *out,long *status,volatile int *abort_flag){
+    *status=0;
+    int rc=trust==CURLE_OK?http_request(c,url,NULL,NULL,out,status,abort_flag):-trust;
+    if((trust!=CURLE_OK||rc==-CURLE_SSL_CACERT_BADFILE)&&!*status&&!(abort_flag&&*abort_flag))
+        rc=http_native_read(url,NULL,NULL,0,out,status,abort_flag);
+    return rc;
 }

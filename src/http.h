@@ -27,4 +27,5 @@ int http_request(CURL *c, const char *url, const char *post_body,
 void http_native_lock(void);
 void http_native_unlock(void);
 int http_native_read(const char *url,const char *body,const char *oauth,int gql,buf_t *out,long *status,volatile int *abort_flag);
+int http_media_get(CURL *c,int trust,const char *url,buf_t *out,long *status,volatile int *abort_flag);
 #endif
