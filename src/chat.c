@@ -105,6 +105,31 @@ int chat_prepare_outgoing(const char *in,char *out,size_t cap){
     return (int)n;
 }
 
+/* Parse the documented Helix response, independent of Vita networking. */
+int chat_parse_send_result(const char *json,char *code,size_t code_cap)
+{
+    json_t *root=json_parse(json);
+    json_t *data=json_get(root,"data");
+    json_t *result=data&&data->type==JSON_ARRAY?json_at(data,0):NULL;
+    json_t *sent=json_get(result,"is_sent");
+    int rc=-1;
+    if(code_cap)snprintf(code,code_cap,"INVALID_RESPONSE");
+    if(sent&&sent->type==JSON_BOOL){
+        if(sent->num!=0){
+            const char *id=json_str(result,"message_id","");
+            if(*id){rc=0;if(code_cap)code[0]=0;}
+        }else{
+            rc=1;
+            const char *why=json_str(result,"drop_reason.code","");
+            /* Log only the protocol's machine-readable code, not message text. */
+            if(!*why||strlen(why)>48||strspn(why,"abcdefghijklmnopqrstuvwxyz0123456789_")!=strlen(why))why="unknown_drop";
+            if(code_cap)snprintf(code,code_cap,"%s",why);
+        }
+    }
+    json_free(root);
+    return rc;
+}
+
 /* ============================================================= emotes */
 
 #define HASH_SIZE 8192 /* power of two, > 2 * CHAT_EMOTES_MAX */
@@ -747,15 +772,12 @@ static int send_native_message(const char *message,char *reason,size_t cap)
     status=0;stage="SEND";
     rc=native_helix("https://api.twitch.tv/helix/chat/messages",payload,response,sizeof(response),&status,0);
     if(rc<0||status!=200)goto done;
-    root=json_parse(response);
-    json_t *result=json_at(json_get(root,"data"),0);
-    json_t *sent=json_get(result,"is_sent");
-    if(sent&&sent->type==JSON_BOOL&&sent->num!=0){
-        LOGI("chat: Helix confirmed is_sent=true (sceHttp)");ret=0;
-    }else{
-        snprintf(reason,cap,"NOT SENT");LOGW("chat: Helix returned is_sent=false or invalid response");
-    }
-    json_free(root);
+    int outcome=chat_parse_send_result(response,reason,cap);
+    if(outcome==0){
+        LOGI("chat: Helix confirmed message_id and is_sent=true (sceHttp)");ret=0;
+    }else if(outcome==1){
+        LOGW("chat: Helix HTTP 200 drop_reason=%s",reason);
+    }else LOGW("chat: Helix HTTP 200 unexpected response schema");
     goto cleanup;
 done:
     if(rc<0)snprintf(reason,cap,"NET %08X",(unsigned)rc);
@@ -814,8 +836,21 @@ static void *chat_thread(void *argp)
                 char reason[64]="",notice[160];
                 int sent=send_native_message(outgoing,reason,sizeof(reason));
                 pthread_mutex_lock(&C.lock);C.awaiting=0;pthread_mutex_unlock(&C.lock);
-                if(sent<0&&!C.stop){snprintf(notice,sizeof(notice),"%s [%s]",vt_msg("Failed to send chat message"),reason);set_status("%s",reason);push_system(notice);}
-                else if(!C.stop)set_status(vt_msg("Conectado"));
+                if(sent<0&&!C.stop){
+                    const int pt=!strcmp(vt_lang_code(vt_lang_current()),"pt-BR");
+                    const char *explanation=NULL;
+                    if(!strcmp(reason,"automod_held"))explanation=pt?"Mensagem retida pelo AutoMod":"Message held by AutoMod";
+                    else if(!strcmp(reason,"msg_duplicate"))explanation=pt?"Mensagem repetida; aguarde 30 s":"Duplicate message; wait 30 s";
+                    else if(!strcmp(reason,"followers_only_mode"))explanation=pt?"Chat apenas para seguidores":"Followers-only chat";
+                    else if(!strcmp(reason,"subs_only_mode"))explanation=pt?"Chat apenas para inscritos":"Subscribers-only chat";
+                    else if(!strcmp(reason,"emote_only_mode"))explanation=pt?"Chat apenas para emotes":"Emote-only chat";
+                    else if(!strcmp(reason,"slow_mode"))explanation=pt?"Modo lento; aguarde":"Slow mode; please wait";
+                    else if(!strcmp(reason,"verified_account")||!strcmp(reason,"verified_phone_number"))explanation=pt?"Conta precisa de verificacao":"Account verification required";
+                    else if(!strcmp(reason,"user_banned")||!strcmp(reason,"user_timed_out")||!strcmp(reason,"user_warned"))explanation=pt?"Restricao de moderacao do canal":"Channel moderation restriction";
+                    else if(!strcmp(reason,"INVALID_RESPONSE"))explanation=pt?"Resposta da Twitch nao reconhecida":"Unexpected Twitch response";
+                    snprintf(notice,sizeof(notice),"%s [%s]",explanation?explanation:vt_msg("Failed to send chat message"),reason);
+                    set_status("%s",reason);push_system(notice);
+                }else if(!C.stop)set_status(vt_msg("Conectado"));
                 /* Anonymous IRC receives the actual broadcast echo; do not fabricate it. */
             }
             if(room_id[0]&&!emotes_done){emotes_done=1;load_badges(room_id);load_7tv(room_id);}

@@ -97,6 +97,8 @@ int chat_queue_message(const char *text);
 void chat_stop(void);
 /* Pure safety parser used by Vita and host regression tests. */
 int chat_prepare_outgoing(const char *in,char *out,size_t cap);
+/* Helix HTTP 200: 0 confirmed, 1 dropped/held, -1 malformed. */
+int chat_parse_send_result(const char *json,char *code,size_t code_cap);
 int chat_running(void);
 /* Locks the message list for reading; recent(0) is the newest. */
 void chat_lock(void);

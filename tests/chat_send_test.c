@@ -14,6 +14,19 @@ int main(void){
  assert(chat_prepare_outgoing(long_msg,out,sizeof out)<0);
  assert(chat_prepare_outgoing("OK",out,2)<0);
  assert(chat_prepare_outgoing(" OK ",out,sizeof out)==2);
- puts("PASS: chat IRC payload validation, unicode, byte bounds, CRLF injection");
+ char reason[64];
+ assert(chat_parse_send_result("{\"data\":[{\"message_id\":\"abc-123\",\"is_sent\":true,\"drop_reason\":null}]}",reason,sizeof reason)==0);
+ assert(reason[0]==0);
+ assert(chat_parse_send_result("{\"data\":[{\"message_id\":\"\",\"is_sent\":false,\"drop_reason\":{\"code\":\"automod_held\",\"message\":\"held\"}}]}",reason,sizeof reason)==1);
+ assert(strcmp(reason,"automod_held")==0);
+ assert(chat_parse_send_result("{\"data\":[{\"is_sent\":false,\"drop_reason\":{\"code\":\"verified_phone_number\"}}]}",reason,sizeof reason)==1);
+ assert(strcmp(reason,"verified_phone_number")==0);
+ assert(chat_parse_send_result("{\"data\":[{\"is_sent\":false,\"drop_reason\":null}]}",reason,sizeof reason)==1);
+ assert(strcmp(reason,"unknown_drop")==0);
+ assert(chat_parse_send_result("{\"data\":[{\"is_sent\":\"true\"}]}",reason,sizeof reason)==-1);
+ assert(chat_parse_send_result("{\"data\":[{\"is_sent\":true,\"message_id\":\"\"}]}",reason,sizeof reason)==-1);
+ assert(chat_parse_send_result("{\"data\":[]}",reason,sizeof reason)==-1);
+ assert(chat_parse_send_result("invalid JSON",reason,sizeof reason)==-1);
+ puts("PASS: chat payload validation and Helix accepted, dropped, malformed responses");
  return 0;
 }
