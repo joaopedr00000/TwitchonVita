@@ -69,6 +69,8 @@ jobs:
       - name: Validate embedded CA generation and OpenSSL trust loading on host
         run: |
           set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libcurl4-openssl-dev libssl-dev
           mkdir -p /tmp/vt-ca
           cmake -DINPUT="$PWD/assets/cacert.pem" -DOUTPUT=/tmp/vt-ca/vt_ca_bundle.h -P cmake/embed_ca.cmake
           gcc -Wall -Wextra -Werror -Isrc -I/tmp/vt-ca tests/tls_trust_test.c src/tls_trust.c -o /tmp/vt-ca/test $(pkg-config --cflags --libs libcurl openssl)
