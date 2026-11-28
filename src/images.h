@@ -24,9 +24,8 @@ void img_prefetch(const char *url);
 /* changes whenever a downloaded image becomes a texture (or fails) */
 unsigned img_version(void);
 
-/* Player mode: img_frame() no longer waits for the GPU to free evicted
- * textures; the player calls img_free_trash() right after its own
- * vita2d_wait_rendering_done(). */
+/* Player mode selects its own smaller cache budget. All frees happen
+ * at the pre-draw GPU fence; img_free_trash is a compatibility no-op. */
 void img_set_deferred_free(int on);
 void img_free_trash(void);
 /* counters since the last call (for the log) */

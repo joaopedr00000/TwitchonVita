@@ -171,11 +171,29 @@ done:
     return rc<0?-CURLE_SSL_CONNECT_ERROR:0;
 }
 
-/* No OAuth headers, no insecure retries; native fallback on CA setup/read failure. */
-int http_media_get(CURL *c,int trust,const char *url,buf_t *out,long *status,volatile int *abort_flag){
+/* Prefer native verified transport after a proven CA-file incompatibility.
+ * No changes to write/mutation requests; no unverified fallback. A failed
+ * native read still allows a verified curl attempt. */
+static int native_preferred;
+int http_verified_read(CURL *c,int trust,const char *url,const char *body,struct curl_slist *headers,const char *oauth,int gql,buf_t *out,long *status,volatile int *abort_flag){
     *status=0;
-    int rc=trust==CURLE_OK?http_request(c,url,NULL,NULL,out,status,abort_flag):-trust;
-    if((trust!=CURLE_OK||rc==-CURLE_SSL_CACERT_BADFILE)&&!*status&&!(abort_flag&&*abort_flag))
-        rc=http_native_read(url,NULL,NULL,0,out,status,abort_flag);
+    if(body&&(!gql||strcmp(url,"https://gql.twitch.tv/gql")||strstr(body,"mutation")))return -CURLE_BAD_FUNCTION_ARGUMENT;
+    if(abort_flag&&*abort_flag)return -CURLE_ABORTED_BY_CALLBACK;
+    int preferred=__atomic_load_n(&native_preferred,__ATOMIC_RELAXED);
+    if(preferred){
+        int rc=http_native_read(url,body,oauth,gql,out,status,abort_flag);
+        if(!rc||(abort_flag&&*abort_flag))return rc;
+        if(trust!=CURLE_OK)return rc;
+    }
+    int rc=trust==CURLE_OK?http_request(c,url,body,headers,out,status,abort_flag):-trust;
+    if((trust!=CURLE_OK||rc==-CURLE_SSL_CACERT_BADFILE)&&!*status&&!(abort_flag&&*abort_flag)&&!preferred){
+        int ca_failure=trust==CURLE_SSL_CACERT_BADFILE||rc==-CURLE_SSL_CACERT_BADFILE;
+        rc=http_native_read(url,body,oauth,gql,out,status,abort_flag);
+        if(!rc&&ca_failure&&!__atomic_exchange_n(&native_preferred,1,__ATOMIC_RELAXED))
+            LOGI("tls: verified native transport preferred for read-only requests after CA error 77");
+    }
     return rc;
+}
+int http_media_get(CURL *c,int trust,const char *url,buf_t *out,long *status,volatile int *abort_flag){
+    return http_verified_read(c,trust,url,NULL,NULL,NULL,0,out,status,abort_flag);
 }

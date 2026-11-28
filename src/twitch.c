@@ -1162,8 +1162,7 @@ static int media_public_gql(const char *login,int kind,twitch_media_t *out,int m
     struct curl_slist *h=curl_slist_append(NULL,"Client-ID: " TWITCH_CLIENT_ID),*next=h?curl_slist_append(h,"Content-Type: text/plain;charset=UTF-8"):NULL;
     if(!next){curl_slist_free_all(h);http_free(c);*net=-CURLE_OUT_OF_MEMORY;return -1;}h=next;
     buf_t b={0};int n=-1;
-    *net=trust==CURLE_OK?http_request(c,"https://gql.twitch.tv/gql",body,h,&b,status,abort_flag):-(int)trust;
-    if((trust!=CURLE_OK||*net==-(int)CURLE_SSL_CACERT_BADFILE)&&!*status&&!(abort_flag&&*abort_flag))*net=http_native_read("https://gql.twitch.tv/gql",body,NULL,1,&b,status,abort_flag);
+    *net=http_verified_read(c,trust,"https://gql.twitch.tv/gql",body,h,NULL,1,&b,status,abort_flag);
     if(kind==4&&!*net&&*status==200&&b.data){
         json_t *check_root=json_parse((const char*)b.data);
         int retry=json_get(check_root,"errors")!=NULL;json_free(check_root);
@@ -1171,8 +1170,7 @@ static int media_public_gql(const char *login,int kind,twitch_media_t *out,int m
             char *field=strstr(body," thumbnailURL");
             if(field)memmove(field,field+strlen(" thumbnailURL"),strlen(field+strlen(" thumbnailURL"))+1);
             buf_free(&b);memset(&b,0,sizeof(b));*status=0;
-            *net=trust==CURLE_OK?http_request(c,"https://gql.twitch.tv/gql",body,h,&b,status,abort_flag):-(int)trust;
-            if((trust!=CURLE_OK||*net==-(int)CURLE_SSL_CACERT_BADFILE)&&!*status&&!(abort_flag&&*abort_flag))*net=http_native_read("https://gql.twitch.tv/gql",body,NULL,1,&b,status,abort_flag);
+            *net=http_verified_read(c,trust,"https://gql.twitch.tv/gql",body,h,NULL,1,&b,status,abort_flag);
         }
     }
     if(!*net&&*status==200&&b.data){
@@ -1230,9 +1228,7 @@ static void media_restrictions(twitch_media_t *out,int n,volatile int *abort_fla
         if(!count)break;
         snprintf(body+used,sizeof(body)-used,"}\"}");
         buf_t buf={0};long status=0;
-        int net=trust==CURLE_OK?http_request(c,"https://gql.twitch.tv/gql",body,h,&buf,&status,abort_flag):-(int)trust;
-        if((trust!=CURLE_OK||net==-(int)CURLE_SSL_CACERT_BADFILE)&&!status&&!(abort_flag&&*abort_flag))
-            net=http_native_read("https://gql.twitch.tv/gql",body,NULL,1,&buf,&status,abort_flag);
+        int net=http_verified_read(c,trust,"https://gql.twitch.tv/gql",body,h,NULL,1,&buf,&status,abort_flag);
         int seen=0,parsed=-1,errors=0;
         if(!net&&status==200&&buf.data){
             parsed=twitch_parse_media_restrictions((const char*)buf.data,out,n,&seen);
@@ -1315,8 +1311,7 @@ int twitch_vod_variants(const char *id,const char *oauth,m3u8_variant_t *out,int
     h=curl_slist_append(h,"Client-ID: " TWITCH_CLIENT_ID);if(!h)goto done;
     struct curl_slist *next=curl_slist_append(h,"Content-Type: text/plain;charset=UTF-8");if(!next)goto done;h=next;
     if(oauth&&*oauth&&!strpbrk(oauth,"\r\n")){char a[160];snprintf(a,sizeof(a),"Authorization: OAuth %s",oauth);next=curl_slist_append(h,a);if(!next)goto done;h=next;}
-    int net=trust==CURLE_OK?http_request(c,"https://gql.twitch.tv/gql",body,h,&b,&status,abort_flag):-(int)trust;
-    if((trust!=CURLE_OK||net==-(int)CURLE_SSL_CACERT_BADFILE)&&!status&&!(abort_flag&&*abort_flag))net=http_native_read("https://gql.twitch.tv/gql",body,oauth,1,&b,&status,abort_flag);
+    int net=http_verified_read(c,trust,"https://gql.twitch.tv/gql",body,h,oauth,1,&b,&status,abort_flag);
     if(net<0||status!=200){
         if(status==403){
             const char *reason=twitch_vod_rejection((const char*)b.data);
@@ -1359,8 +1354,7 @@ int twitch_clip_mp4(const char *id,char *url,size_t cap,int *height,char *err,si
     CURLcode trust=vt_tls_configure(c);curl_easy_setopt(c,CURLOPT_FOLLOWLOCATION,0L);
     struct curl_slist *h=curl_slist_append(NULL,"Client-ID: " TWITCH_CLIENT_ID),*next=h?curl_slist_append(h,"Content-Type: text/plain;charset=UTF-8"):NULL;
     if(!next)goto done_clip;h=next;
-    int net=trust==CURLE_OK?http_request(c,"https://gql.twitch.tv/gql",body,h,&b,&status,abort_flag):-(int)trust;
-    if((trust!=CURLE_OK||net==-CURLE_SSL_CACERT_BADFILE)&&!status&&!(abort_flag&&*abort_flag))net=http_native_read("https://gql.twitch.tv/gql",body,NULL,1,&b,&status,abort_flag);
+    int net=http_verified_read(c,trust,"https://gql.twitch.tv/gql",body,h,NULL,1,&b,&status,abort_flag);
     if(net||status!=200){snprintf(err,errlen,"Clip HTTP %ld / network %d",status,-net);goto done_clip;}
     json_t *root=json_parse((const char*)b.data),*arr=json_path(root,"data.clip.videoQualities");
     const char *token=json_str(root,"data.clip.playbackAccessToken.value",""),*sig=json_str(root,"data.clip.playbackAccessToken.signature","");
@@ -1385,8 +1379,7 @@ done_clip:
     if(rc<0&&status==200&&(!vod[0]||*offset<0)&&!(abort_flag&&*abort_flag)&&h){
         snprintf(body,sizeof(body),"{\"query\":\"query { clip(slug: \\\"%s\\\") { video { id } videoOffsetSeconds } }\"}",id);
         long ms=0;
-        int mn=trust==CURLE_OK?http_request(c,"https://gql.twitch.tv/gql",body,h,&b,&ms,abort_flag):-(int)trust;
-        if((trust!=CURLE_OK||mn==-CURLE_SSL_CACERT_BADFILE)&&!ms&&!(abort_flag&&*abort_flag))mn=http_native_read("https://gql.twitch.tv/gql",body,NULL,1,&b,&ms,abort_flag);
+        int mn=http_verified_read(c,trust,"https://gql.twitch.tv/gql",body,h,NULL,1,&b,&ms,abort_flag);
         if(!mn&&ms==200&&b.data)twitch_parse_clip_source((const char*)b.data,vod,vod_cap,offset);
         LOGI("clip: source lookup HTTP %ld net=%d available=%d",ms,mn,vod[0]&&*offset>=0);
     }

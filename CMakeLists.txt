@@ -32,6 +32,7 @@ add_executable(${PROJECT_NAME}
   src/auth.c
   src/task.c
   src/images.c
+  src/image_decode.c
   src/ui.c
   src/log.c
   src/text.c

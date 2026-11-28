@@ -46,7 +46,7 @@ int _newlib_heap_size_user = 96 * 1024 * 1024;
 #define SETTINGS_FILE DATA_DIR "/settings.txt"
 #define LOG_FILE      DATA_DIR "/log.txt"
 #define LOG_PREV_FILE DATA_DIR "/log_prev.txt"
-#define APP_VERSION   "1.34-media-playback-test30"
+#define APP_VERSION   "1.34-media-playback-test31"
 
 #define MAX_ITEMS 100
 
@@ -2252,6 +2252,9 @@ vita2d_draw_rectangle(0,0,960,544,CLASSIC_BG);
             else{
                 int page=cursor[ci]/8*8;
                 for(int k=0;k<8&&page+k<j->n;k++)profile_media_card(&j->out[page+k],18+(k%4)*232,193+(k/4)*152,grid_focus==1&&cursor[ci]==page+k);
+                /* Small adjacent-page prefetch; visible cards always win. */
+                for(int k=page-2;k<page;k++)if(k>=0)img_prefetch(j->out[k].thumb);
+                for(int k=page+8;k<page+10&&k<j->n;k++)img_prefetch(j->out[k].thumb);
                 char pages[48];snprintf(pages,sizeof(pages),"%d / %d",page/8+1,(j->n+7)/8);ui_text_fit(810,520,125,C_GREY,.82f,pages);
                 if(profile_has_more(j,ci,page)||state[ci]==4){
                     ui_round_rect(600,498,200,36,5,grid_focus==2?C_PURPLE:C_PANEL);
