@@ -118,15 +118,17 @@ jobs:
             assert b'VTWI00001' in sfo
             assert b'01.34' in sfo
             assert b'Twitch\x00' in sfo
-          print('PASS experimental VitaSDK VPK, version 01.34, title ID and trusted IRC CA bundle')
+            for name in ('sce_sys/icon0.png','sce_sys/livearea/contents/bg.png','sce_sys/livearea/contents/startup.png','sce_sys/livearea/contents/template.xml'):
+                assert z.read(name)==pathlib.Path(name).read_bytes(), name
+          print('PASS experimental VitaSDK VPK, version 01.34, title ID, CA bundle and approved artwork')
           PY
-          cp build-ci/VitaTwitch.vpk Twitch-1.34-MediaPlayback17.vpk
-          sha256sum Twitch-1.34-MediaPlayback17.vpk > SHA256SUMS.txt
+          cp build-ci/VitaTwitch.vpk Twitch-1.34-MediaPlayback18.vpk
+          sha256sum Twitch-1.34-MediaPlayback18.vpk > SHA256SUMS.txt
       - uses: actions/upload-artifact@v4
         with:
-          name: Twitch-1.34-MediaPlayback17-EXPERIMENTAL
+          name: Twitch-1.34-MediaPlayback18-EXPERIMENTAL
           path: |
-            Twitch-1.34-MediaPlayback17.vpk
+            Twitch-1.34-MediaPlayback18.vpk
             SHA256SUMS.txt
             ca-bundle.sha256
           retention-days: 14

@@ -45,7 +45,7 @@ int _newlib_heap_size_user = 96 * 1024 * 1024;
 #define SETTINGS_FILE DATA_DIR "/settings.txt"
 #define LOG_FILE      DATA_DIR "/log.txt"
 #define LOG_PREV_FILE DATA_DIR "/log_prev.txt"
-#define APP_VERSION   "1.34-media-playback-test17"
+#define APP_VERSION   "1.34-media-playback-test18"
 
 #define MAX_ITEMS 100
 
@@ -836,18 +836,30 @@ static void draw_center_msg(const char *title, const char *msg, int top)
  #define TV_NAV_COUNT 7
 #define TV_NAV_X 88
 #define TV_NAV_STEP 124
+/* Shared drawing/touch geometry: leave a full text line between sections. */
+#define TV_ROW_TOP 264
+#define TV_SEARCH_ROW_TOP 289
+#define TV_ROW_STEP 132
+#define TV_TILE_W 222
+#define TV_TILE_H 78
+#define TV_NAME_BASELINE 98
+#define TV_TILE_HIT_H 106
+#define TV_SECTION_BASELINE 12
+_Static_assert(TV_ROW_STEP-TV_SECTION_BASELINE-TV_NAME_BASELINE>=22, "TV section title clearance");
+_Static_assert(TV_ROW_TOP+TV_ROW_STEP+TV_TILE_HIT_H<=FOOTER_Y, "TV rows fit above footer");
+static int tv_row_top(void){return !g_tv_home&&g_tab==TAB_SEARCH?TV_SEARCH_ROW_TOP:TV_ROW_TOP;}
 static const char *tv_nav_label(int i){
     switch(i){case 0:return vt_lang_current()==2?"Início":vt_lang_current()==1?"Inicio":"Home";case 1:return vt_tr(VT_I_FOLLOWING);case 2:return channels_label();case 3:return games_label();case 4:return vt_tr(VT_I_SEARCH);case 5:return profile_label(0);default:return vt_tr(VT_I_SETTINGS);}
 }
 static void tv_tile(const twitch_stream_t *s,int x,int y,int active){
-    const int w=222,h=84;
+    const int w=TV_TILE_W,h=TV_TILE_H;
     vita2d_draw_rectangle(x,y,w,h,RGBA8(28,28,32,255));
     vita2d_texture *t=s->live?img_get(s->preview):NULL;
     if(t)ui_image(t,x,y,w,h);else draw_avatar(s->avatar,s->display,x+86,y+8,54);
-    if(s->live){ui_round_rect(x+5,y+5,49,18,3,C_RED);ui_text_fit(x+9,y+18,41,C_WHITE,.68f,vt_tr(VT_I_LIVE));}
+    if(s->live){const char *live=vt_tr(VT_I_LIVE);int bw=ui_text_w(.68f,live)+12;if(bw<49)bw=49;if(bw>w-10)bw=w-10;ui_round_rect(x+5,y+5,bw,18,3,C_RED);ui_text_fit(x+10,y+18,bw-10,C_WHITE,.68f,live);}
     if(saved_has(s->login)&&!account_follow_known(s->login)){ui_round_rect(x+75,y+5,142,18,3,C_PANEL);ui_text_fit(x+79,y+18,134,C_WHITE,.65f,twitch_follow_label(0,1));}
     if(active)ui_frame(x-3,y-3,w+6,h+6,3,C_PURPLE);
-    ui_text_fit(x,y+102,w,C_WHITE,.79f,s->display[0]?s->display:s->login);
+    ui_text_fit(x,y+TV_NAME_BASELINE,w,C_WHITE,.79f,s->display[0]?s->display:s->login);
 }
 static void tv_row(int tab,int y,const char *label){
     tab_t *tb=&g_tabs[tab];int n=home_count(tb),pos=home_pos(tb);
@@ -855,11 +867,11 @@ static void tv_row(int tab,int y,const char *label){
     int grid=!g_tv_home&&tab==TAB_EXPLORE&&!g_game_id[0]&&!g_game_filter[0];
     int slots=grid?8:4;
     int first=pos>=0?(pos/slots)*slots:0;
-    ui_text_fit(20,y-12,800,C_WHITE,.98f,label);
+    ui_text_fit(20,y-TV_SECTION_BASELINE,800,C_WHITE,.98f,label);
     if(!n){if(tb->busy||tb->state==LS_LOADING)ui_spinner(36,y+37,9,C_PURPLE);else ui_text_fit(20,y+40,900,C_GREY,.84f,tb->need_login?vt_tr(VT_I_ACCOUNT):tb->state==LS_ERROR?tb->err:vt_msg("Sin resultados"));return;}
-    for(int k=0;k<slots&&first+k<n;k++){int idx=home_index(tb,first+k);if(idx>=0)tv_tile(&tb->items[idx],20+(k%4)*233,y+(k/4)*113,!g_tv_nav_focus&&g_tab==tab&&idx==tb->sel);}
+    for(int k=0;k<slots&&first+k<n;k++){int idx=home_index(tb,first+k);if(idx>=0)tv_tile(&tb->items[idx],20+(k%4)*233,y+(k/4)*TV_ROW_STEP,!g_tv_nav_focus&&g_tab==tab&&idx==tb->sel);}
     if(first+slots<n)img_prefetch(tb->items[home_index(tb,first+slots)].preview);
-    char page[32];snprintf(page,sizeof(page),"%d/%d",pos>=0?pos+1:1,n);ui_text_fit(864,y-12,77,C_GREY,.76f,page);
+    char page[32];snprintf(page,sizeof(page),"%d/%d",pos>=0?pos+1:1,n);ui_text_fit(864,y-TV_SECTION_BASELINE,77,C_GREY,.76f,page);
 }
 static void draw_tv_home(void){
     vita2d_draw_rectangle(0,0,SCREEN_W,SCREEN_H,RGBA8(14,14,16,255));
@@ -877,12 +889,14 @@ static void draw_tv_home(void){
         ui_round_rect(20,60,920,35,5,C_PANEL);ui_text_fit(32,84,896,C_WHITE,.94f,g_search[0]?g_search:vt_tr(VT_I_SEARCH));
         if(!g_tv_nav_focus&&tb->sel<0)ui_frame(20,60,920,35,2,C_PURPLE);
     }
-    int hy=g_tab==TAB_SEARCH?102:65,hh=g_tab==TAB_SEARCH?157:195;
+    int search_hero=!g_tv_home&&g_tab==TAB_SEARCH;
+    int hy=search_hero?102:65,hh=search_hero?157:165;
     if(idx>=0){
         const twitch_stream_t *s=&tb->items[idx];char line[256],v[32];
         vita2d_texture *t=s->live?img_get(s->preview):NULL;
-        vita2d_draw_rectangle(20,hy,355,hh,RGBA8(27,27,30,255));
-        if(t)ui_image(t,20,hy,355,hh);else draw_avatar(s->avatar,s->display,145,hy+20,106);
+        int hw=hh*16/9;
+        vita2d_draw_rectangle(20,hy,hw,hh,RGBA8(27,27,30,255));
+        if(t)ui_image(t,20,hy,hw,hh);else draw_avatar(s->avatar,s->display,20+(hw-106)/2,hy+(hh-106)/2,106);
         ui_text_fit(397,hy+25,540,s->live?C_RED:C_GREY,.87f,s->live?vt_tr(VT_I_LIVE):vt_tr(VT_I_OFFLINE));
         ui_text_fit(397,hy+60,540,C_WHITE,1.48f,s->display[0]?s->display:s->login);
         ui_text_fit(397,hy+91,540,C_WHITE,1.03f,s->title);
@@ -895,10 +909,10 @@ static void draw_tv_home(void){
         else ui_text_fit(22,hy+84,900,C_GREY,.9f,tb->need_login?vt_tr(VT_I_ACCOUNT):tb->state==LS_ERROR?tb->err:vt_msg("Sin resultados"));
     }
     if(g_tv_home){
-        tv_row(TAB_FOLLOWED,289,g_follow_offline==2?saved_title():vt_tr(VT_I_FOLLOWING));
-        tv_row(TAB_EXPLORE,402,vt_lang_current()==2?"Canais ao vivo populares":vt_lang_current()==1?"Canales en directo populares":"Top live channels");
+        tv_row(TAB_FOLLOWED,tv_row_top(),g_follow_offline==2?saved_title():vt_tr(VT_I_FOLLOWING));
+        tv_row(TAB_EXPLORE,tv_row_top()+TV_ROW_STEP,vt_lang_current()==2?"Canais ao vivo populares":vt_lang_current()==1?"Canales en directo populares":"Top live channels");
     }else{
-        tv_row(g_tab,289,g_tab==TAB_FOLLOWED?following_mode():g_tab==TAB_SEARCH?vt_tr(VT_I_SEARCH):g_game_filter[0]?g_game_filter:channels_label());
+        tv_row(g_tab,tv_row_top(),g_tab==TAB_FOLLOWED?following_mode():g_tab==TAB_SEARCH?vt_tr(VT_I_SEARCH):g_game_filter[0]?g_game_filter:channels_label());
         if(g_tab!=TAB_EXPLORE||g_game_id[0]||g_game_filter[0])ui_text_fit(20,425,920,C_GREY,.9f,vt_lang_current()==2?"Use esquerda/direita para navegar • START para perfil":"Use left/right to browse • START for profile");
     }
     draw_footer();
@@ -2316,12 +2330,12 @@ static void tv_input(void){
     if(p&(SCE_CTRL_LTRIGGER|SCE_CTRL_RTRIGGER)){int next=(g_tv_nav+(p&SCE_CTRL_RTRIGGER?1:TV_NAV_COUNT-1))%TV_NAV_COUNT;tv_activate(next);return;}
     if(g_in.touch_tap){
         for(int i=0;i<TV_NAV_COUNT;i++)if(ui_touch_hit(&g_in,TV_NAV_X+i*TV_NAV_STEP,0,TV_NAV_STEP,54)){tv_activate(i);return;}
-        if(ui_touch_hit(&g_in,397,g_tab==TAB_SEARCH?234:197,170,30)&&!g_tv_nav_focus){open_selected();return;}
+        if(ui_touch_hit(&g_in,397,!g_tv_home&&g_tab==TAB_SEARCH?234:197,170,30)&&!g_tv_nav_focus){open_selected();return;}
         if(g_tab==TAB_SEARCH&&ui_touch_hit(&g_in,20,60,920,35)){tb->sel=-1;g_tv_nav_focus=0;open_selected();return;}
         int grid=!g_tv_home&&g_tab==TAB_EXPLORE&&!g_game_id[0]&&!g_game_filter[0];
         for(int row=0;row<(g_tv_home?2:1);row++){
             int t=g_tv_home?(row?TAB_EXPLORE:TAB_FOLLOWED):g_tab;tab_t *r=&g_tabs[t];int n=home_count(r),pos=home_pos(r),slots=grid?8:4,first=pos>=0?pos/slots*slots:0;
-            for(int k=0;k<slots&&first+k<n;k++)if(ui_touch_hit(&g_in,20+(k%4)*233,289+(row+k/4)*113,222,105)){g_tab=t;g_side_focus=-1;g_tv_nav_focus=0;r->sel=home_index(r,first+k);open_selected();return;}
+            for(int k=0;k<slots&&first+k<n;k++)if(ui_touch_hit(&g_in,20+(k%4)*233,tv_row_top()+(row+k/4)*TV_ROW_STEP,TV_TILE_W,TV_TILE_HIT_H)){g_tab=t;g_side_focus=-1;g_tv_nav_focus=0;r->sel=home_index(r,first+k);open_selected();return;}
         }
         if(ui_touch_hit(&g_in,SCREEN_W-180,FOOTER_Y,180,SCREEN_H-FOOTER_Y)){profile_selected();return;}
     }
