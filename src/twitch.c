@@ -172,6 +172,7 @@ int twitch_build_list_body(twitch_list_t kind, const char *query, char *out, siz
             "{\"query\":\"query { streams(first: 30%s) { edges { node { " STREAM_FIELDS
             " broadcaster { login displayName profileImageURL(width: 70) } } } } }\"}",filter);
     }
+    case TW_LIST_CATEGORY: return -1; /* Helix path, not GQL */
     case TW_LIST_SEARCH: {
         char q[256];
         if (twitch_json_escape(query ? query : "", q, sizeof(q)) < 0)
@@ -205,6 +206,54 @@ int twitch_parse_token(const char *json, char *token, size_t token_cap,
 static void copy_str(char *dst, size_t cap, const char *src)
 {
     snprintf(dst, cap, "%s", src ? src : "");
+}
+
+/* Twitch Helix image templates, bounded before inserting them into cache. */
+static void category_image_url(const char *src,char *out,size_t cap,int w,int h)
+{
+    out[0]=0;
+    if(!src||strncmp(src,"https://",8))return;
+    size_t n=0;
+    while(*src){
+        char tmp[16];const char *piece=src;size_t len=1,advance=1;
+        if(!strncmp(src,"{width}",7)){snprintf(tmp,sizeof(tmp),"%d",w);piece=tmp;len=strlen(tmp);advance=7;}
+        else if(!strncmp(src,"{height}",8)){snprintf(tmp,sizeof(tmp),"%d",h);piece=tmp;len=strlen(tmp);advance=8;}
+        if(n+len>=cap){out[0]=0;return;}
+        memcpy(out+n,piece,len);n+=len;src+=advance;
+    }
+    out[n]=0;
+}
+int twitch_parse_categories(const char *json,twitch_category_t *out,int max)
+{
+    if(!json||!out||max<0)return -1;
+    json_t *root=json_parse(json),*data=json_get(root,"data");
+    int n=0;
+    if(!data||data->type!=JSON_ARRAY){json_free(root);return -1;}
+    for(json_t *v=data->child;v&&n<max;v=v->next){
+        const char *id=json_str(v,"id",""),*name=json_str(v,"name","");
+        if(!*id||strlen(id)>=sizeof(out[n].id)||strlen(id)!=strspn(id,"0123456789")||!*name)continue;
+        twitch_category_t *g=&out[n++];memset(g,0,sizeof(*g));
+        copy_str(g->id,sizeof(g->id),id);copy_str(g->name,sizeof(g->name),name);
+        category_image_url(json_str(v,"box_art_url",""),g->art,sizeof(g->art),144,192);
+    }
+    json_free(root);return n;
+}
+int twitch_parse_category_streams(const char *json,twitch_stream_t *out,int max)
+{
+    if(!json||!out||max<0)return -1;
+    json_t *root=json_parse(json),*data=json_get(root,"data");
+    int n=0;
+    if(!data||data->type!=JSON_ARRAY){json_free(root);return -1;}
+    for(json_t *v=data->child;v&&n<max;v=v->next){
+        const char *login=json_str(v,"user_login","");char url[96];
+        if(twitch_channel_url(login,url,sizeof(url))<0)continue;
+        twitch_stream_t *s=&out[n++];memset(s,0,sizeof(*s));s->live=1;
+        copy_str(s->login,sizeof(s->login),login);copy_str(s->display,sizeof(s->display),json_str(v,"user_name",login));
+        copy_str(s->title,sizeof(s->title),json_str(v,"title",""));copy_str(s->game,sizeof(s->game),json_str(v,"game_name",""));
+        double count=json_num(v,"viewer_count",0);s->viewers=count>=0&&count<=2147483647.0?(int)count:0;
+        category_image_url(json_str(v,"thumbnail_url",""),s->preview,sizeof(s->preview),320,180);
+    }
+    json_free(root);return n;
 }
 
 /* user: object with login/displayName/profileImageURL/stream{...} */
@@ -276,6 +325,7 @@ int twitch_parse_list(const char *json, twitch_list_t kind, twitch_stream_t *out
     case TW_LIST_TOP:
         edges = json_path(root, "data.streams.edges");
         break;
+    case TW_LIST_CATEGORY: break;
     case TW_LIST_SEARCH:
         edges = json_path(root, "data.searchFor.channels.edges");
         break;
@@ -537,6 +587,40 @@ int twitch_fetch_channel_bio(const char *login,char *bio,size_t cap,volatile int
     buf_free(&resp);return rc;
 }
 
+int twitch_fetch_categories(const char *oauth,twitch_category_t *out,int max,volatile int *abort_flag)
+{
+    if(!oauth||!*oauth)return -2;
+    twitch_follow_job_t auth={0};snprintf(auth.oauth,sizeof(auth.oauth),"%s",oauth);
+    buf_t resp={0};int n=-1;
+    if(follow_request("https://api.twitch.tv/helix/games/top?first=60",NULL,&auth,1,&resp,abort_flag)==0)
+        n=twitch_parse_categories((const char*)resp.data,out,max);
+    buf_free(&resp);return n;
+}
+static int fetch_category_streams(const char *query,const char *oauth,twitch_stream_t *out,int max,volatile int *abort_flag)
+{
+    if(!oauth||!*oauth||!query)return -2;
+    char id[32],language[16]="",url[192];
+    size_t k=strcspn(query,"|");
+    if(!k||k>=sizeof(id))return -1;
+    memcpy(id,query,k);id[k]=0;
+    if(!numeric_id(id))return -1;
+    if(query[k]=='|'){
+        const char *s=query+k+1;
+        static const char *const valid[]={"PT","EN","ES","FR","DE","IT","RU","JA","KO","ZH","ID","TL","NL","PL","TR","UK","SV","AR","TH","VI","OTHER"};
+        for(unsigned i=0;i<sizeof(valid)/sizeof(valid[0]);i++)if(!strcmp(s,valid[i])){
+            snprintf(language,sizeof(language),"%s",!strcmp(s,"OTHER")?"other":s);
+            for(char *p=language;*p;p++)*p=(char)tolower((unsigned char)*p);
+            break;
+        }
+        if(!strcmp(s,"ZH_HK"))snprintf(language,sizeof(language),"zh-hk");
+    }
+    snprintf(url,sizeof(url),"https://api.twitch.tv/helix/streams?first=60&game_id=%s%s%s",id,language[0]?"&language=":"",language);
+    twitch_follow_job_t auth={0};snprintf(auth.oauth,sizeof(auth.oauth),"%s",oauth);
+    buf_t resp={0};int n=-1;
+    if(follow_request(url,NULL,&auth,1,&resp,abort_flag)==0)n=twitch_parse_category_streams((const char*)resp.data,out,max);
+    buf_free(&resp);return n;
+}
+
 int twitch_fetch_list(twitch_list_t kind, const char *query, const char *oauth,
                       twitch_stream_t *out, int max, char *err, size_t errlen,
                       volatile int *abort_flag)
@@ -544,6 +628,11 @@ int twitch_fetch_list(twitch_list_t kind, const char *query, const char *oauth,
     char body[1024];
     buf_t resp = {0};
     int n;
+    if(kind==TW_LIST_CATEGORY){
+        int r=fetch_category_streams(query,oauth,out,max,abort_flag);
+        if(r<0)snprintf(err,errlen,vt_lang_current()==2?"Não foi possível carregar a categoria.":"Could not load category.");
+        return r;
+    }
     /* followedLiveUsers fails for some accounts every time: once it has failed,
      * go straight to the fallback for the rest of the session */
     static int followed_broken;

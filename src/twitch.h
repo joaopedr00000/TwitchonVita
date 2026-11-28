@@ -13,7 +13,8 @@
 typedef enum {
     TW_LIST_FOLLOWED = 0,   /* live channels the user follows (needs login) */
     TW_LIST_TOP,            /* most watched live streams */
-    TW_LIST_SEARCH          /* channel search (live and offline) */
+    TW_LIST_SEARCH,         /* channel search (live and offline) */
+    TW_LIST_CATEGORY        /* authenticated category-specific live list */
 } twitch_list_t;
 
 typedef struct {
@@ -26,6 +27,10 @@ typedef struct {
     int viewers;
     int live;
 } twitch_stream_t;
+
+typedef struct {char id[32],name[96],art[192];} twitch_category_t;
+int twitch_parse_categories(const char *json,twitch_category_t *out,int max);
+int twitch_parse_category_streams(const char *json,twitch_stream_t *out,int max);
 
 /* Lowercases and strips anything not valid in a Twitch login. Returns length. */
 int twitch_sanitize_login(const char *in, char *out, size_t cap);
@@ -75,6 +80,7 @@ int twitch_gql(const char *body, const char *oauth, buf_t *resp,
                char *err, size_t errlen, volatile int *abort_flag);
 
 int twitch_follow_run(void *arg,volatile int *abort_flag);
+int twitch_fetch_categories(const char *oauth,twitch_category_t *out,int max,volatile int *abort_flag);
 int twitch_fetch_channel_bio(const char *login, char *bio, size_t cap, volatile int *abort_flag);
 int twitch_fetch_list(twitch_list_t kind, const char *query, const char *oauth,
                       twitch_stream_t *out, int max, char *err, size_t errlen,
