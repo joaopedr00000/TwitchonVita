@@ -62,13 +62,15 @@ int main(void){
     assert(twitch_build_vod_url("123","t","s",42,vodurl,5)<0);
     assert(!strcmp(twitch_vod_rejection("[{\"type\":\"error\",\"error\":\"Invalid signature\"}]"),"SIGNATURE"));
     assert(!strcmp(twitch_vod_rejection("{\"message\":\"Subscribers only\"}"),"SUBSCRIPTION"));
-    assert(!strcmp(twitch_vod_rejection("[{\"error_code\":\"vod_manifest_restricted\"}]"),"SUBSCRIPTION"));
-    assert(!strcmp(twitch_vod_rejection("{\"error_code\":\"unauthorized_entitlements\"}"),"SUBSCRIPTION"));
+    assert(!strcmp(twitch_vod_rejection("[{\"error_code\":\"vod_manifest_restricted\"}]"),"DENIED"));
+    assert(!strcmp(twitch_vod_rejection("{\"error_code\":\"unauthorized_entitlements\"}"),"DENIED"));
     assert(!strcmp(twitch_vod_rejection("not JSON"),"UNKNOWN"));
     assert(!strcmp(twitch_vod_rejection("{\"error\":\"Forbidden\",\"message\":\"Subscribers only\"}"),"SUBSCRIPTION"));
     assert(vt_lang_set_code("pt-BR")==0);
     assert(!strcmp(twitch_vod_access_message("SUBSCRIPTION"),"Este vídeo está disponível apenas para inscritos no canal."));
-    assert(!strstr(twitch_vod_access_message("DENIED"),"inscritos"));
+    assert(strstr(twitch_vod_access_message("DENIED"),"Talvez"));
+    assert(strstr(twitch_vod_access_message("UNKNOWN"),"inscritos"));
+    assert(!strstr(twitch_vod_access_message("SIGNATURE"),"inscritos"));
     assert(!strstr(twitch_vod_access_message("SIGNATURE"),"403"));
     assert(vt_lang_set_code("es")==0);
     assert(strstr(twitch_vod_access_message("SUBSCRIPTION"),"suscriptores"));

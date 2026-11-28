@@ -45,7 +45,7 @@ int _newlib_heap_size_user = 96 * 1024 * 1024;
 #define SETTINGS_FILE DATA_DIR "/settings.txt"
 #define LOG_FILE      DATA_DIR "/log.txt"
 #define LOG_PREV_FILE DATA_DIR "/log_prev.txt"
-#define APP_VERSION   "1.34-media-playback-test27"
+#define APP_VERSION   "1.34-media-playback-test28"
 
 #define MAX_ITEMS 100
 
@@ -2000,7 +2000,7 @@ static int recorded_play(twitch_media_t *v,int can_previous,int can_next){
     }
     static vod_job_t j;memset(&j,0,sizeof(j));snprintf(j.id,sizeof(j.id),"%s",v->id);snprintf(j.oauth,sizeof(j.oauth),"%s",g_logged?g_auth.access:"");
     task_t task={0};if(run_with_spinner(&task,vod_job_run,&j,vt_lang_current()==2?"Carregando gravação...":"Loading recording...")<0)return 0;
-    if(j.n<=0){if(!strcmp(j.err,twitch_vod_access_message("SUBSCRIPTION")))v->subscriber_only=1;modal_message("VOD",j.err[0]?j.err:"No compatible quality");return 0;}
+    if(j.n<=0){if(!strcmp(j.err,twitch_vod_access_message("SUBSCRIPTION")))v->subscriber_only=1;modal_message("VOD",j.err[0]?j.err:twitch_vod_access_message("UNKNOWN"));return 0;}
     m3u8_variant_t *variants[M3U8_MAX_VARIANTS];int n=0;
     for(int i=0;i<j.n;i++)if(!j.v[i].audio_only&&j.v[i].height>0&&j.v[i].height<=720&& !strncmp(j.v[i].url,"https://",8))variants[n++]=&j.v[i];
     if(!n){modal_message("VOD","No compatible H.264 quality <= 720p");return 0;}

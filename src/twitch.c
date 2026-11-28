@@ -77,8 +77,8 @@ const char *twitch_vod_rejection(const char *body){
         json_str(r,"error",""),json_str(r,"message",""));
     for(size_t i=0;lower[i];i++)lower[i]=(char)tolower((unsigned char)lower[i]);
     const char *code=json_str(r,"0.error_code",json_str(r,"error_code",""));
-    const char *why=!strcmp(code,"vod_manifest_restricted")||!strcmp(code,"unauthorized_entitlements")||
-        strstr(lower,"subscriber")||strstr(lower,"subscription")?"SUBSCRIPTION":
+    const char *why=strstr(lower,"subscriber")||strstr(lower,"subscription")?"SUBSCRIPTION":
+        !strcmp(code,"vod_manifest_restricted")||!strcmp(code,"unauthorized_entitlements")?"DENIED":
         strstr(lower,"geo")||strstr(lower,"region")?"REGION":
         strstr(lower,"expired")?"EXPIRED":
         strstr(lower,"signature")?"SIGNATURE":
@@ -131,9 +131,32 @@ const char *twitch_vod_access_message(const char *reason){
         "无法访问此视频。请检查账号或视频是否可用。",
         "無法存取此影片。請檢查帳號或影片是否可用。"
     };
+    static const char *const possible[VT_LANG_COUNT]={
+        "Unable to access this video. It may be exclusive to channel subscribers (subs).",
+        "No se pudo acceder al vídeo. Puede ser exclusivo para suscriptores del canal.",
+        "Não foi possível acessar este vídeo. Talvez ele seja exclusivo para inscritos (subs) do canal.",
+        "Impossible d'accéder à cette vidéo. Elle est peut-être réservée aux abonnés de la chaîne.",
+        "Impossibile accedere al video. Potrebbe essere riservato agli abbonati al canale.",
+        "Kein Zugriff auf dieses Video. Es könnte nur für Kanalabonnenten verfügbar sein.",
+        "Нет доступа к видео. Возможно, оно доступно только платным подписчикам канала.",
+        "Video tidak dapat diakses. Mungkin khusus untuk pelanggan kanal.",
+        "Hindi ma-access ang video. Maaaring para lang ito sa mga subscriber ng channel.",
+        "Dili ma-access ang video. Basin para lamang kini sa mga subscriber sa channel.",
+        "Geen toegang tot deze video. Mogelijk alleen voor abonnees van het kanaal.",
+        "Brak dostępu do filmu. Może być dostępny tylko dla subskrybentów kanału.",
+        "Videoya erişilemiyor. Yalnızca kanal abonelerine özel olabilir.",
+        "Немає доступу до відео. Можливо, воно лише для платних підписників каналу.",
+        "Videon kan inte nås. Den kan vara reserverad för kanalens prenumeranter.",
+        "動画にアクセスできません。チャンネルのサブスクライバー限定の可能性があります。",
+        "동영상에 접근할 수 없습니다. 채널 유료 구독자 전용일 수 있습니다.",
+        "无法访问此视频。可能仅限频道付费订阅者观看。",
+        "無法存取此影片。可能僅供頻道付費訂閱者觀看。"
+    };
     int lang=vt_lang_current();
     if(lang<0||lang>=VT_LANG_COUNT)lang=0;
-    return reason&&!strcmp(reason,"SUBSCRIPTION")?subscriber[lang]:denied[lang];
+    if(reason&&!strcmp(reason,"SUBSCRIPTION"))return subscriber[lang];
+    if(!reason||!strcmp(reason,"DENIED")||!strcmp(reason,"UNKNOWN"))return possible[lang];
+    return denied[lang];
 }
 int twitch_video_subscriber_type(const char *type){
     if(!type)return 0;
