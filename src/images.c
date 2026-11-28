@@ -11,7 +11,8 @@
 #include <psp2/kernel/cpu.h>
 #include <psp2/kernel/processmgr.h>
 
-#define MAX_IMAGES 192 /* thumbnails + avatars + chat emotes */
+#define MAX_IMAGES 192
+#define HOME_IMAGES 64 /* independent home and playback cache quotas */
 #define MAX_URL 192
 #define DECODES_PER_FRAME 1
 #define EVICT_MS 3000u
@@ -266,7 +267,9 @@ static vita2d_texture *request(const char *url, int prio)
         return NULL;
 
     pthread_mutex_lock(&g_lock);
-    for (int i = 0; i < MAX_IMAGES; i++) {
+    int begin=g_defer_free?HOME_IMAGES:0;
+    int end=g_defer_free?MAX_IMAGES:HOME_IMAGES;
+    for (int i = begin; i < end; i++) {
         image_t *im = &g_img[i];
         if (im->state == IMG_FREE) {
             if (free_slot < 0)

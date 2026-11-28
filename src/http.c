@@ -17,7 +17,9 @@ void http_global_term(void)
 static size_t write_cb(char *ptr, size_t size, size_t nmemb, void *userdata)
 {
     buf_t *b = userdata;
+    if(nmemb && size>SIZE_MAX/nmemb)return 0;
     size_t n = size * nmemb;
+    if(b->size>16u*1024u*1024u || n>16u*1024u*1024u-b->size)return 0;
     if (buf_append(b, ptr, n) < 0)
         return 0;
     return n;
@@ -43,7 +45,10 @@ CURL *http_new(void)
     curl_easy_setopt(c, CURLOPT_CONNECTTIMEOUT, 10L);
     curl_easy_setopt(c, CURLOPT_TIMEOUT, 20L);
     curl_easy_setopt(c, CURLOPT_BUFFERSIZE, 64L * 1024L);
-    /* The Vita has no up-to-date CA store; NetStream also skips verification. */
+    /* Restore original Vita HTTP compatibility mode. HTTPS remains encrypted
+     * but server authenticity is NOT verified. Never use this for IRC TLS. */
+    curl_easy_setopt(c, CURLOPT_PROTOCOLS, (long)CURLPROTO_HTTPS);
+    curl_easy_setopt(c, CURLOPT_REDIR_PROTOCOLS, (long)CURLPROTO_HTTPS);
     curl_easy_setopt(c, CURLOPT_SSL_VERIFYPEER, 0L);
     curl_easy_setopt(c, CURLOPT_SSL_VERIFYHOST, 0L);
     curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, write_cb);
@@ -94,9 +99,7 @@ int http_request(CURL *c, const char *url, const char *post_body,
             LOGE("%s %s -> curl %d (%s) tras %llu ms", m, log_url(url, u, sizeof(u)), (int)res,
                  curl_easy_strerror(res), ms);
     } else if (*status >= 400 && !(out->data && strstr((const char *)out->data, "authorization_pending"))) {
-        /* error bodies (GQL / usher / oauth) explain the reason; never contain secrets */
-        LOGE("%s %s -> HTTP %ld (%llu ms): %.200s", m, log_url(url, u, sizeof(u)), *status, ms,
-             out->data ? (const char *)out->data : "");
+        LOGE("%s %s -> HTTP %ld (%llu ms)", m, log_url(url, u, sizeof(u)), *status, ms);
     } else if (ms > 4000) {
         LOGW("%s %s lenta: %llu ms, %u bytes", m, log_url(url, u, sizeof(u)), ms, (unsigned)out->size);
     }

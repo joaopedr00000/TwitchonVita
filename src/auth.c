@@ -1,3 +1,4 @@
+#include "i18n.h"
 #include "auth.h"
 #include "json.h"
 #include "twitch.h"
@@ -31,8 +32,8 @@ int auth_parse_device(const char *json, auth_device_t *d, char *err, size_t errl
             d->interval = 5;
         ret = 0;
     } else {
-        snprintf(err, errlen, "Twitch rechazo el inicio de sesion: %s",
-                 json_str(r, "message", "respuesta no valida"));
+        snprintf(err, errlen, vt_msg("Twitch rechazo el inicio de sesion: %s"),
+                 json_str(r, "message", vt_msg("respuesta no valida")));
     }
     json_free(r);
     return ret;
@@ -55,11 +56,11 @@ int auth_parse_token(const char *json, auth_t *a, char *err, size_t errlen)
         else if (!strcmp(msg, "slow_down"))
             ret = AUTH_SLOW_DOWN;
         else if (!strcmp(msg, "expired_token"))
-            snprintf(err, errlen, "El codigo ha caducado. Vuelve a intentarlo.");
+            snprintf(err, errlen, vt_msg("El codigo ha caducado. Vuelve a intentarlo."));
         else if (!strcmp(msg, "access_denied"))
-            snprintf(err, errlen, "Has rechazado el acceso en Twitch.");
+            snprintf(err, errlen, vt_msg("Has rechazado el acceso en Twitch."));
         else
-            snprintf(err, errlen, "Error de Twitch: %s", msg[0] ? msg : "respuesta no valida");
+            snprintf(err, errlen, vt_msg("Error de Twitch: %s"), msg[0] ? msg : vt_msg("respuesta no valida"));
     }
     json_free(r);
     return ret;
@@ -112,12 +113,13 @@ int auth_load(auth_t *a, const char *path)
 
 int auth_save(const auth_t *a, const char *path)
 {
-    FILE *f = fopen(path, "w");
-    if (!f)
-        return -1;
-    fprintf(f, "access=%s\nrefresh=%s\nuser_id=%s\nlogin=%s\ndisplay=%s\navatar=%s\n",
-            a->access, a->refresh, a->user_id, a->login, a->display, a->avatar);
-    fclose(f);
+    char tmp[512];
+    if(snprintf(tmp,sizeof(tmp),"%s.tmp",path)>=(int)sizeof(tmp))return -1;
+    FILE *f=fopen(tmp,"w");if(!f)return -1;
+    int ok=fprintf(f,"access=%s\nrefresh=%s\nuser_id=%s\nlogin=%s\ndisplay=%s\navatar=%s\n",a->access,a->refresh,a->user_id,a->login,a->display,a->avatar)>=0;
+    if(fflush(f)!=0)ok=0;
+    if(fclose(f)!=0)ok=0;
+    if(!ok||rename(tmp,path)!=0){remove(tmp);return -1;}
     return 0;
 }
 
@@ -143,10 +145,10 @@ int auth_device_start(auth_device_t *d, char *err, size_t errlen, volatile int *
     long status = 0;
     int ret;
     char form[256];
-    snprintf(form, sizeof(form), "client_id=%s&scopes=user%%3Aread%%3Afollows%%20chat%%3Aread%%20chat%%3Aedit",
+    snprintf(form, sizeof(form), "client_id=%s&scopes=user%%3Aread%%3Afollows%%20chat%%3Aread%%20chat%%3Aedit%%20user%%3Awrite%%3Achat",
              TWITCH_CLIENT_ID);
     if (post_form("https://id.twitch.tv/oauth2/device", form, &resp, &status, abort_flag) < 0) {
-        snprintf(err, errlen, "Error de red al contactar id.twitch.tv");
+        snprintf(err, errlen, vt_msg("Error de red al contactar id.twitch.tv"));
         buf_free(&resp);
         return -1;
     }
@@ -163,7 +165,7 @@ int auth_device_poll(const auth_device_t *d, auth_t *a, char *err, size_t errlen
     int ret;
     char form[384];
     snprintf(form, sizeof(form),
-             "client_id=%s&scopes=user%%3Aread%%3Afollows%%20chat%%3Aread%%20chat%%3Aedit"
+             "client_id=%s&scopes=user%%3Aread%%3Afollows%%20chat%%3Aread%%20chat%%3Aedit%%20user%%3Awrite%%3Achat"
              "&device_code=%s&grant_type=urn%%3Aietf%%3Aparams%%3Aoauth%%3Agrant-type%%3Adevice_code",
              TWITCH_CLIENT_ID, d->device_code);
     if (post_form("https://id.twitch.tv/oauth2/token", form, &resp, &status, abort_flag) < 0) {
@@ -251,9 +253,9 @@ int auth_ensure_valid(auth_t *a, char *err, size_t errlen, volatile int *abort_f
     if (r == 0)
         fetch_profile(a, abort_flag);
     else if (r == -1)
-        snprintf(err, errlen, "La sesion ha caducado. Vuelve a iniciar sesion.");
+        snprintf(err, errlen, vt_msg("La sesion ha caducado. Vuelve a iniciar sesion."));
     else
-        snprintf(err, errlen, "No se pudo comprobar la sesion (sin conexion?)");
+        snprintf(err, errlen, vt_msg("No se pudo comprobar la sesion (sin conexion?)"));
     return r;
 }
 #endif

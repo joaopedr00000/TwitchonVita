@@ -2,8 +2,8 @@
 #define VT_CHAT_H
 
 /*
- * Read-only Twitch chat (anonymous IRC over TLS, like the web player when
- * logged out) with Twitch and 7TV emotes.
+ * Twitch IRC over TLS with anonymous read-only mode and optional authenticated
+ * sending (chat:read/chat:edit scopes). Includes Twitch and 7TV emotes.
  *
  * The parsing / emote part is plain C and is tested on the PC
  * (tests/chat_test.c); the network thread only exists on the Vita.
@@ -88,8 +88,18 @@ int chat_load_badges(const char *json);
 int chat_resolve_badges(const char *tag, int16_t *out, int max);
 
 /* ---- live chat (Vita only) ---- */
-void chat_start(const char *login);
+/* Anonymous IRC read; authenticated Helix writes use verified Sony HTTPS. */
+void chat_start(const char *login,const char *nick,const char *oauth,const char *sender_id);
+int chat_can_send(void);
+int chat_retry_auth(void);
+/* 0 queued, -1 unavailable, -2 rate limited, -3 invalid text. */
+int chat_queue_message(const char *text);
 void chat_stop(void);
+/* Pure safety parser used by Vita and host regression tests. */
+int chat_prepare_outgoing(const char *in,char *out,size_t cap);
+/* Helix HTTP 200: 0 confirmed, 1 dropped/held, -1 malformed. */
+int chat_validate_identity(const char *body,const char *client,const char *sender,char *reason,size_t cap);
+int chat_parse_send_result(const char *json,char *code,size_t code_cap);
 int chat_running(void);
 /* Locks the message list for reading; recent(0) is the newest. */
 void chat_lock(void);

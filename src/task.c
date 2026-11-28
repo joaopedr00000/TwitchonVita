@@ -26,7 +26,7 @@ int task_start(task_t *t, task_fn fn, void *arg)
         return -1;
     }
     task_t *self = t;
-    sceKernelStartThread(th, sizeof(self), &self);
+    if(sceKernelStartThread(th,sizeof(self),&self)<0){sceKernelDeleteThread(th);t->busy=0;t->done=1;return -1;}
     return 0;
 }
 

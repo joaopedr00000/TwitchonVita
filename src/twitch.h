@@ -69,6 +69,9 @@ int twitch_fetch_list(twitch_list_t kind, const char *query, const char *oauth,
  * Returns the number of variants (>0), or <0 with a message in err. */
 int twitch_get_variants(const char *channel, const char *oauth, m3u8_variant_t *out, int max,
                         char *err, size_t errlen, volatile int *abort_flag);
+int twitch_find_clean_variant(const char *channel,const char *oauth,const char *current,
+                              int width,int height,float fps,char *out,
+                              volatile int *abort_flag);
 #endif
 
 #endif

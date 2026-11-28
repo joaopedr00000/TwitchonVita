@@ -1,0 +1,125 @@
+name: VitaTwitch — 19 languages, touch and chat SEND experimental checks
+on:
+  push:
+    branches: ['features/i18n19-touch-select-chat-send', 'visual/twitch-classic']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: twitch-vita-feature-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  host-unit-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - name: 19 locale catalogs + multilingual keyboard conversion
+        run: |
+          set -euo pipefail
+          gcc -std=c11 -Wall -Wextra -Werror -Isrc tests/i18n_test.c src/i18n.c -o /tmp/vt-locale-test
+          /tmp/vt-locale-test
+          gcc -std=c11 -Wall -Wextra -Werror -Isrc tests/ime_utf8_test.c src/ime_utf8.c -o /tmp/vt-keyboard-test
+          /tmp/vt-keyboard-test
+          gcc -std=c11 -Wall -Wextra -Werror -Isrc tests/playback_policy_test.c src/playback_policy.c -o /tmp/vt-policy-test
+          /tmp/vt-policy-test
+          gcc -std=c11 -Wall -Wextra -Isrc tests/m3u8_ad_test.c src/m3u8.c -o /tmp/vt-m3u8-ad-test
+          /tmp/vt-m3u8-ad-test
+          gcc -DVT_NO_NET -std=gnu11 -Wall -Wextra -Isrc tests/twitch_region_test.c src/twitch.c src/json.c src/log.c src/i18n.c -o /tmp/vt-region-test
+          /tmp/vt-region-test
+          gcc -std=gnu11 -Wall -Wextra -Werror -pthread -Isrc tests/pktqueue_test.c src/pktqueue.c -o /tmp/vt-queue-test
+          /tmp/vt-queue-test
+      - name: IRC message sanitization and UTF-8 security checks
+        run: |
+          set -euo pipefail
+          gcc -DVT_NO_NET -std=gnu11 -Wall -Wextra -Isrc \
+            tests/chat_send_test.c src/chat.c src/json.c src/text.c src/log.c src/i18n.c \
+            -o /tmp/vt-chat-send-test
+          /tmp/vt-chat-send-test
+      - name: Verify Vita source wiring without altering original player codecs
+        run: |
+          set -euo pipefail
+          grep -q 'SceTouch_stub' CMakeLists.txt
+          grep -q 'src/i18n.c' CMakeLists.txt
+          grep -q 'src/ime_utf8.c' CMakeLists.txt
+          grep -Fq 'PASS SCHMOOPIIE' src/chat.c
+          ! grep -Fq 'PASS oauth:' src/chat.c
+          grep -Fq 'sceHttpsEnableOption(CHAT_VERIFY_FLAGS)' src/chat.c
+          grep -Fq 'https://api.twitch.tv/helix/chat/messages' src/chat.c
+          grep -Fq 'user%%3Awrite%%3Achat' src/auth.c
+          grep -Fq 'chat_queue_message(message)' src/player.c
+          grep -Fq 'pthread_create(&C.thread' src/chat.c
+          grep -Fq 'pthread_join(C.thread' src/chat.c
+          grep -Fq 'chat_start(pp->login,pp->chat_nick,pp->chat_oauth,pp->chat_sender_id)' src/player.c
+          grep -Fq 'SCE_CTRL_SELECT' src/player.c
+          grep -Fq 'vt_lang_set_code' src/main.c
+  vita-sdk-vpk:
+    needs: host-unit-tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 70
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download current Mozilla CA bundle for verified Twitch IRC TLS
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p assets
+          curl --fail --location --retry 3 --show-error --silent https://curl.se/ca/cacert.pem -o assets/cacert.pem
+          test "$(grep -c -- '-----BEGIN CERTIFICATE-----' assets/cacert.pem)" -ge 100
+          sha256sum assets/cacert.pem | tee ca-bundle.sha256
+          echo 'The CA file is obtained over verified GitHub Actions runner HTTPS.' >> "$GITHUB_STEP_SUMMARY"
+      - name: Validate embedded CA generation and OpenSSL trust loading on host
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libcurl4-openssl-dev libssl-dev
+          mkdir -p /tmp/vt-ca
+          cmake -DINPUT="$PWD/assets/cacert.pem" -DOUTPUT=/tmp/vt-ca/vt_ca_bundle.h -P cmake/embed_ca.cmake
+          gcc -Wall -Wextra -Werror -Isrc -I/tmp/vt-ca tests/tls_trust_test.c src/tls_trust.c -o /tmp/vt-ca/test $(pkg-config --cflags --libs libcurl openssl)
+          /tmp/vt-ca/test
+      - name: Compile VitaTwitch with VitaSDK (no public release)
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm -v "$PWD:/src" -w /src -e VITASDK=/usr/local/vitasdk \
+            vitasdk/vitasdk:2026.08 bash -lc '
+              set -euo pipefail
+              export PATH="$VITASDK/bin:$PATH"
+              # OpenSSL 1.1.1 is pre-installed in this image; installing the
+              # legacy 'openssl' package causes a conflicting 1.0.2 downgrade.
+              vdpm install libvita2d libpng libjpeg-turbo curl zlib zstd
+              cmake -S . -B build-ci -DCMAKE_BUILD_TYPE=Release
+              # vita_create_vpk target is SDK/version-dependent; build all.
+              cmake --build build-ci -j4
+            '
+      - name: Validate real VPK contents, CA trust store and version
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import pathlib,struct,zipfile
+          pkg=pathlib.Path('build-ci/VitaTwitch.vpk')
+          assert pkg.is_file() and pkg.stat().st_size>500000,pkg
+          with zipfile.ZipFile(pkg) as z:
+            assert z.testzip() is None
+            names=set(z.namelist())
+            assert 'eboot.bin' in names
+            assert 'ca/cacert.pem' in names
+            cert=z.read('ca/cacert.pem')
+            assert cert.count(b'-----BEGIN CERTIFICATE-----')>=100
+            sfo=z.read('sce_sys/param.sfo')
+            assert b'VTWI00001' in sfo
+            assert b'01.33' in sfo
+            assert b'Twitch\x00' in sfo
+          print('PASS experimental VitaSDK VPK, version 01.33, title ID and trusted IRC CA bundle')
+          PY
+          cp build-ci/VitaTwitch.vpk Twitch-1.33-Classic.vpk
+          sha256sum Twitch-1.33-Classic.vpk > SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Twitch-1.33-Classic-EXPERIMENTAL
+          path: |
+            Twitch-1.33-Classic.vpk
+            SHA256SUMS.txt
+            ca-bundle.sha256
+          retention-days: 14
+          if-no-files-found: error

@@ -1,3 +1,4 @@
+#include "i18n.h"
 #include "twitch.h"
 #include "json.h"
 #include "log.h"
@@ -49,7 +50,7 @@ int twitch_json_escape(const char *s, char *out, size_t cap)
     return (int)n;
 }
 
-int twitch_build_gql_body(const char *login, char *out, size_t cap)
+static int build_gql_profile(const char *login,const char *profile,char *out,size_t cap)
 {
     /* Inline query (no persisted-query hash) so it keeps working when hashes rotate. */
     return snprintf(out, cap,
@@ -57,8 +58,13 @@ int twitch_build_gql_body(const char *login, char *out, size_t cap)
         "\"query\":\"query PlaybackAccessToken_Template($login: String!, $playerType: String!, $platform: String!) "
         "{ streamPlaybackAccessToken(channelName: $login, params: {platform: $platform, playerBackend: \\\"mediaplayer\\\", playerType: $playerType}) "
         "{ value signature __typename } }\","
-        "\"variables\":{\"login\":\"%s\",\"playerType\":\"site\",\"platform\":\"web\"}}",
-        login);
+        "\"variables\":{\"login\":\"%s\",\"playerType\":\"%s\",\"platform\":\"web\"}}",
+        login,profile);
+}
+
+int twitch_build_gql_body(const char *login,char *out,size_t cap)
+{
+    return build_gql_profile(login,"site",out,cap);
 }
 
 #define STREAM_FIELDS \
@@ -73,10 +79,18 @@ int twitch_build_list_body(twitch_list_t kind, const char *query, char *out, siz
         return snprintf(out, cap,
             "{\"query\":\"query { currentUser { followedLiveUsers(first: 100) { edges { node { "
             USER_FIELDS " } } } } }\"}");
-    case TW_LIST_TOP:
-        return snprintf(out, cap,
-            "{\"query\":\"query { streams(first: 30) { edges { node { " STREAM_FIELDS
-            " broadcaster { login displayName profileImageURL(width: 70) } } } } }\"}");
+    case TW_LIST_TOP: {
+        /* Only a fixed set of valid GraphQL language enums can enter the query. */
+        static const char *const langs[]={"PT","EN","ES","FR","DE","IT","RU","JA","KO","ZH","ZH_HK","ID","TL","NL","PL","TR","UK","SV","AR","TH","VI","OTHER"};
+        const char *lang=NULL;
+        for(unsigned i=0;query && i<sizeof(langs)/sizeof(langs[0]);i++)
+            if(!strcmp(query,langs[i])){lang=langs[i];break;}
+        char filter[64]="";
+        if(lang)snprintf(filter,sizeof(filter),", options: {languages: [%s]}",lang);
+        return snprintf(out,cap,
+            "{\"query\":\"query { streams(first: 30%s) { edges { node { " STREAM_FIELDS
+            " broadcaster { login displayName profileImageURL(width: 70) } } } } }\"}",filter);
+    }
     case TW_LIST_SEARCH: {
         char q[256];
         if (twitch_json_escape(query ? query : "", q, sizeof(q)) < 0)
@@ -158,7 +172,7 @@ int twitch_parse_list(const char *json, twitch_list_t kind, twitch_stream_t *out
     char gerr[160];
 
     if (!root) {
-        snprintf(err, errlen, "Respuesta de Twitch no valida");
+        snprintf(err, errlen, vt_msg("Respuesta de Twitch no valida"));
         return -1;
     }
     /* GraphQL may return errors next to valid data (e.g. one broken stream in
@@ -171,7 +185,7 @@ int twitch_parse_list(const char *json, twitch_list_t kind, twitch_stream_t *out
     case TW_LIST_FOLLOWED: {
         json_t *cu = json_path(root, "data.currentUser");
         if ((!cu || cu->type != JSON_OBJECT) && !gql_err) {
-            snprintf(err, errlen, "Sesion caducada: vuelve a iniciar sesion");
+            snprintf(err, errlen, vt_msg("Sesion caducada: vuelve a iniciar sesion"));
             json_free(root);
             return -2;
         }
@@ -186,7 +200,7 @@ int twitch_parse_list(const char *json, twitch_list_t kind, twitch_stream_t *out
         break;
     }
     if (!edges || edges->type != JSON_ARRAY) {
-        snprintf(err, errlen, "Twitch: %s", gql_err ? gql_err : "respuesta sin lista");
+        snprintf(err, errlen, vt_msg("Twitch: %s"), gql_err ? gql_err : vt_msg("respuesta sin lista"));
         json_free(root);
         return -1;
     }
@@ -232,7 +246,7 @@ int twitch_parse_follows(const char *json, twitch_stream_t *out, int max, int *n
     json_t *root = json_parse(json);
     *has_next = 0;
     if (!root) {
-        snprintf(err, errlen, "Respuesta de Twitch no valida");
+        snprintf(err, errlen, vt_msg("Respuesta de Twitch no valida"));
         return -1;
     }
     const char *gql_err = gql_error_text(root, gerr, sizeof(gerr));
@@ -240,13 +254,13 @@ int twitch_parse_follows(const char *json, twitch_stream_t *out, int max, int *n
         LOGW("gql follows: %s", gql_err);
     json_t *cu = json_path(root, "data.currentUser");
     if ((!cu || cu->type != JSON_OBJECT) && !gql_err) {
-        snprintf(err, errlen, "Sesion caducada: vuelve a iniciar sesion");
+        snprintf(err, errlen, vt_msg("Sesion caducada: vuelve a iniciar sesion"));
         json_free(root);
         return -2;
     }
     json_t *edges = json_path(cu, "follows.edges");
     if (!edges || edges->type != JSON_ARRAY) {
-        snprintf(err, errlen, "Twitch: %s", gql_err ? gql_err : "respuesta sin lista");
+        snprintf(err, errlen, vt_msg("Twitch: %s"), gql_err ? gql_err : vt_msg("respuesta sin lista"));
         json_free(root);
         return -1;
     }
@@ -289,7 +303,7 @@ int twitch_gql(const char *body, const char *oauth, buf_t *resp,
     CURL *c = http_new();
 
     if (!c) {
-        snprintf(err, errlen, "No se pudo iniciar curl");
+        snprintf(err, errlen, vt_msg("No se pudo iniciar curl"));
         return -1;
     }
     hdr = curl_slist_append(hdr, "Client-ID: " TWITCH_CLIENT_ID);
@@ -298,12 +312,19 @@ int twitch_gql(const char *body, const char *oauth, buf_t *resp,
         snprintf(auth, sizeof(auth), "Authorization: OAuth %s", oauth);
         hdr = curl_slist_append(hdr, auth);
     }
-    if (http_request(c, "https://gql.twitch.tv/gql", body, hdr, resp, &status, abort_flag) < 0)
-        snprintf(err, errlen, "Error de red al contactar con Twitch");
+    int net=http_request(c,"https://gql.twitch.tv/gql",body,hdr,resp,&status,abort_flag);
+    if(net==-(int)CURLE_COULDNT_RESOLVE_HOST||net==-(int)CURLE_COULDNT_CONNECT||
+       net==-(int)CURLE_OPERATION_TIMEDOUT||net==-(int)CURLE_RECV_ERROR||
+       net==-(int)CURLE_SEND_ERROR){
+        if(!(abort_flag&&*abort_flag))
+            net=http_request(c,"https://gql.twitch.tv/gql",body,hdr,resp,&status,abort_flag);
+    }
+    if(net<0)
+        snprintf(err,errlen,"%s (curl %d)",vt_msg("Error de red al contactar con Twitch"),-net);
     else if (status == 401)
-        snprintf(err, errlen, "Sesion caducada: vuelve a iniciar sesion");
+        snprintf(err, errlen, vt_msg("Sesion caducada: vuelve a iniciar sesion"));
     else if (status != 200)
-        snprintf(err, errlen, "gql.twitch.tv respondio HTTP %ld", status);
+        snprintf(err, errlen, vt_msg("gql.twitch.tv respondio HTTP %ld"), status);
     else
         ret = 0;
     curl_slist_free_all(hdr);
@@ -323,15 +344,15 @@ int twitch_fetch_list(twitch_list_t kind, const char *query, const char *oauth,
     static int followed_broken;
 
     if (kind == TW_LIST_FOLLOWED && (!oauth || !oauth[0])) {
-        snprintf(err, errlen, "Inicia sesion para ver tus canales seguidos");
+        snprintf(err, errlen, vt_msg("Inicia sesion para ver tus canales seguidos"));
         return -2;
     }
     if (kind == TW_LIST_FOLLOWED && followed_broken) {
         n = -1;
-        snprintf(err, errlen, "fallo antes en esta sesion");
+        snprintf(err, errlen, vt_msg("fallo antes en esta sesion"));
     } else {
         if (twitch_build_list_body(kind, query, body, sizeof(body)) < 0) {
-            snprintf(err, errlen, "Busqueda demasiado larga");
+            snprintf(err, errlen, vt_msg("Busqueda demasiado larga"));
             return -1;
         }
         if (twitch_gql(body, oauth, &resp, err, errlen, abort_flag) < 0) {
@@ -369,7 +390,7 @@ int twitch_fetch_list(twitch_list_t kind, const char *query, const char *oauth,
     return n;
 }
 
-int twitch_get_variants(const char *channel, const char *oauth, m3u8_variant_t *out, int max,
+static int get_variants_profile(const char *channel,const char *oauth,const char *profile,m3u8_variant_t *out,int max,
                         char *err, size_t errlen, volatile int *abort_flag)
 {
     char login[64];
@@ -383,13 +404,13 @@ int twitch_get_variants(const char *channel, const char *oauth, m3u8_variant_t *
     CURL *c = NULL;
 
     if (twitch_sanitize_login(channel, login, sizeof(login)) == 0) {
-        snprintf(err, errlen, "Nombre de canal no valido");
+        snprintf(err, errlen, vt_msg("Nombre de canal no valido"));
         return -1;
     }
 
     /* 1) Playback access token through Twitch's GraphQL API. With the user's
      *    OAuth token, subscribers/Turbo users get their ad-free playlist. */
-    twitch_build_gql_body(login, body, sizeof(body));
+    build_gql_profile(login,profile,body,sizeof(body));
     if (twitch_gql(body, oauth, &resp, err, errlen, abort_flag) < 0) {
         /* an expired login must not block anonymous viewing */
         if (!(oauth && oauth[0]) ||
@@ -397,13 +418,13 @@ int twitch_get_variants(const char *channel, const char *oauth, m3u8_variant_t *
             goto out;
     }
     if (twitch_parse_token((const char *)resp.data, token, sizeof(token), sig, sizeof(sig)) < 0) {
-        snprintf(err, errlen, "El canal '%s' no existe", login);
+        snprintf(err, errlen, vt_msg("El canal '%s' no existe"), login);
         goto out;
     }
 
     c = http_new();
     if (!c) {
-        snprintf(err, errlen, "No se pudo iniciar curl");
+        snprintf(err, errlen, vt_msg("No se pudo iniciar curl"));
         goto out;
     }
 
@@ -418,25 +439,25 @@ int twitch_get_variants(const char *channel, const char *oauth, m3u8_variant_t *
     curl_free(etoken);
 
     if (http_request(c, url, NULL, NULL, &resp, &status, abort_flag) < 0) {
-        snprintf(err, errlen, "Error de red al contactar usher.ttvnw.net");
+        snprintf(err, errlen, vt_msg("Error de red al contactar usher.ttvnw.net"));
         goto out;
     }
     if (status == 404) {
-        snprintf(err, errlen, "'%s' no esta en directo", login);
+        snprintf(err, errlen, vt_msg("'%s' no esta en directo"), login);
         goto out;
     }
     if (status == 403) {
-        snprintf(err, errlen, "Twitch no permite ver este canal (bloqueo regional o solo suscriptores)");
+        snprintf(err, errlen, vt_msg("Twitch no permite ver este canal (bloqueo regional o solo suscriptores)"));
         goto out;
     }
     if (status != 200) {
-        snprintf(err, errlen, "usher respondio HTTP %ld", status);
+        snprintf(err, errlen, vt_msg("usher respondio HTTP %ld"), status);
         goto out;
     }
 
     ret = m3u8_parse_master((const char *)resp.data, out, max);
     if (ret <= 0) {
-        snprintf(err, errlen, "No se encontraron calidades en la playlist");
+        snprintf(err, errlen, vt_msg("No se encontraron calidades en la playlist"));
         ret = -1;
     }
 
@@ -444,5 +465,51 @@ out:
     buf_free(&resp);
     http_free(c);
     return ret;
+}
+
+int twitch_get_variants(const char *channel,const char *oauth,m3u8_variant_t *out,int max,
+                        char *err,size_t errlen,volatile int *abort_flag)
+{
+    return get_variants_profile(channel,oauth,"site",out,max,err,errlen,abort_flag);
+}
+
+/* Experimental direct fallback: no external proxy; never swap incompatible
+ * renditions. Probe current media, not just the master playlist. The caller
+ * reopens its decoder rather than mixing timestamps from two HLS sessions. */
+int twitch_find_clean_variant(const char *channel,const char *oauth,const char *current,
+                              int width,int height,float fps,char *out,
+                              volatile int *abort_flag)
+{
+    static m3u8_variant_t variants[M3U8_MAX_VARIANTS];
+    static m3u8_media_t media;
+    static const char *profiles[]={"embed","popout"};
+    char err[160];
+    buf_t pl={0};
+    CURL *c=http_new();
+    if(!c)return 0;
+    int found=0;
+    for(int p=0;p<2&&!found&&!*abort_flag;p++){
+        int n=get_variants_profile(channel,oauth,profiles[p],variants,M3U8_MAX_VARIANTS,
+                                   err,sizeof(err),abort_flag);
+        for(int i=0;i<n&&!*abort_flag;i++){
+            const m3u8_variant_t *v=&variants[i];
+            if(v->audio_only||v->width!=width||v->height!=height||
+               (fps>0&&v->fps>0&&(v->fps-fps>1.0f||fps-v->fps>1.0f))||
+               strncmp(v->url,"https://",8)||!strcmp(v->url,current))continue;
+            long status=0;
+            if(http_request(c,v->url,NULL,NULL,&pl,&status,abort_flag)==0&&status==200&&
+               m3u8_parse_media((const char *)pl.data,v->url,&media)==0&&
+               !media.ended&&media.count>=2&&
+               !media.seg[media.count-1].is_ad&&!media.seg[media.count-2].is_ad){
+                snprintf(out,M3U8_URL_MAX,"%s",v->url);
+                found=1;
+                LOGI("hls: alternate clean rendition found (%s)",profiles[p]);
+            }
+            break; /* one compatible rendition per profile */
+        }
+    }
+    buf_free(&pl);
+    http_free(c);
+    return found;
 }
 #endif

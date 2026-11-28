@@ -80,7 +80,7 @@ void log_write(char level, const char *fmt, ...)
         /* flushing every line blocked whichever thread logged (the video thread
          * too) on memory-card writes: errors go out at once, the rest at most
          * once per second */
-        if (level == 'E' || ms - g_last_flush >= 1000ULL || g_full) {
+        if (level == 'E' || strncmp(fmt, "startup:", 8) == 0 || ms - g_last_flush >= 1000ULL || g_full) {
             fflush(g_f);
             g_last_flush = ms;
         }
