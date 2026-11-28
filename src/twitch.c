@@ -91,6 +91,21 @@ int twitch_parse_follow_state(const char *json,char *id,size_t cap)
     }
     json_free(root);return state;
 }
+int twitch_parse_helix_follow(const char *json,const char *target)
+{
+    if(!json||!target||!*target)return -1;
+    json_t *root=json_parse(json);
+    json_t *data=json_get(root,"data");
+    int state=-1;
+    if(data&&data->type==JSON_ARRAY&&!json_get(root,"error")){
+        if(data->count==0)state=0;
+        else for(json_t *x=data->child;x;x=x->next){
+            const char *id=json_str(x,"broadcaster_id","");
+            if(!strcmp(id,target)){state=1;break;}
+        }
+    }
+    json_free(root);return state;
+}
 const char *twitch_follow_label(int state)
 {
     int l=vt_lang_current();
@@ -107,6 +122,12 @@ const char *twitch_follow_notice(int status)
     case 2:return l==2?"Confirmando com a Twitch...":l==1?"Confirmando con Twitch...":"Checking with Twitch...";
     case 3:return l==2?"Estado confirmado pela Twitch.":l==1?"Estado confirmado por Twitch.":"Confirmed by Twitch.";
     case 4:return l==2?"A Twitch não confirmou a ação. Tente consultar novamente.":l==1?"Twitch no confirmó la acción.":"Twitch did not confirm. Check again.";
+    case 5:return l==2?"Twitch exige verificação de integridade.":l==1?"Twitch exige verificación de integridad.":"Twitch requires an integrity check.";
+    case 6:return l==2?"Sessão ou permissão recusada pela Twitch.":l==1?"Sesión o permiso rechazado.":"Twitch rejected session or permission.";
+    case 7:return l==2?"Falha na conexão segura (TLS).":l==1?"Error de conexión segura (TLS).":"Secure connection failed (TLS).";
+    case 8:return l==2?"Falha de rede ao consultar Twitch.":l==1?"Error de red al consultar Twitch.":"Twitch network request failed.";
+    case 9:return l==2?"Resposta da API incompatível.":l==1?"Respuesta de API incompatible.":"Unsupported API response.";
+    case 10:return l==2?"Twitch recusou ou não aplicou o Follow.":l==1?"Twitch no aplicó el seguimiento.":"Twitch rejected or did not apply follow.";
     default:return l==2?"Follow experimental na conta Twitch.":l==1?"Seguimiento experimental en Twitch.":"Experimental Twitch account follow.";
     }
 }
@@ -394,57 +415,111 @@ int twitch_gql(const char *body, const char *oauth, buf_t *resp,
 
 /* Authenticated GraphQL requests: verified TLS only, no redirect, no automatic
  * mutation retry and no logging of credentials or response bodies. */
-static int follow_gql(const char *body,const char *oauth,buf_t *resp,volatile int *abort_flag)
+/* Use verified TLS for all new account operations. Do not bypass integrity
+ * checks or retry mutations. Log only fixed categories and HTTP/curl codes. */
+static int follow_request(const char *url,const char *body,twitch_follow_job_t *j,
+                          int helix,buf_t *resp,volatile int *abort_flag)
 {
-    if(!oauth||!*oauth||strlen(oauth)>100||strpbrk(oauth,"\r\n"))return -1;
-    CURL *c=http_new();if(!c)return -1;
-    if(vt_tls_configure(c)!=CURLE_OK){http_free(c);return -1;}
+    if(!j->oauth[0]||strlen(j->oauth)>100||strpbrk(j->oauth,"\r\n")){j->status=6;return -1;}
+    CURL *c=http_new();if(!c){j->status=8;return -1;}
+    if(vt_tls_configure(c)!=CURLE_OK){http_free(c);j->status=7;LOGW("follow: TLS configuration failed");return -1;}
     curl_easy_setopt(c,CURLOPT_FOLLOWLOCATION,0L);
     curl_easy_setopt(c,CURLOPT_CONNECTTIMEOUT,5L);
     curl_easy_setopt(c,CURLOPT_TIMEOUT,10L);
-    char auth[160];snprintf(auth,sizeof(auth),"Authorization: OAuth %s",oauth);
+    char auth[160];snprintf(auth,sizeof(auth),"Authorization: %s %s",helix?"Bearer":"OAuth",j->oauth);
     struct curl_slist *h=NULL,*next;
     const char *headers[]={"Client-ID: " TWITCH_CLIENT_ID,"Content-Type: text/plain;charset=UTF-8",auth};
     int rc=-1;long status=0;
     for(int i=0;i<3;i++){
-        next=curl_slist_append(h,headers[i]);if(!next)goto done;h=next;
+        next=curl_slist_append(h,headers[i]);if(!next){j->status=8;goto done;}h=next;
     }
-    if(http_request(c,"https://gql.twitch.tv/gql",body,h,resp,&status,abort_flag)==0&&status==200)rc=0;
+    int net=http_request(c,url,body,h,resp,&status,abort_flag);
+    LOGI("follow: %s %s http=%ld curl=%d",helix?"helix":"gql",body&&strstr(body,"mutation")?"mutation":"read",status,net);
+    if(net<0){
+        j->status=(net==-(int)CURLE_SSL_CONNECT_ERROR||net==-(int)CURLE_PEER_FAILED_VERIFICATION||net==-(int)CURLE_SSL_CACERT_BADFILE)?7:8;
+    }else if(status==401||status==403)j->status=6;
+    else if(status!=200)j->status=8;
+    else{
+        json_t *root=resp->data?json_parse((const char*)resp->data):NULL;
+        const char *msg=json_str(root,"errors.0.message","");
+        const char *challenge=json_str(root,"extensions.challenge.type","");
+        if(strstr(msg,"integrity")||!strcmp(challenge,"integrity"))j->status=5;
+        else if(strstr(msg,"unauthorized")||strstr(msg,"Unauthorized")||strstr(msg,"authentication"))j->status=6;
+        else if(!root||json_get(root,"errors")||json_get(root,"error"))j->status=9;
+        else rc=0;
+        json_free(root);
+    }
+    if(rc<0)LOGW("follow: failure category=%d",j->status);
 done:
     curl_slist_free_all(h);http_free(c);return rc;
+}
+static int numeric_id(const char *id)
+{
+    return id&&*id&&strlen(id)<32&&strlen(id)==strspn(id,"0123456789");
+}
+static int follow_read_helix(twitch_follow_job_t *j,volatile int *abort_flag)
+{
+    char url[192];
+    if(!numeric_id(j->user_id)){j->status=6;return -1;}
+    if(!numeric_id(j->id)){
+        char check[96];if(twitch_channel_url(j->login,check,sizeof(check))<0){j->status=9;return -1;}
+        snprintf(url,sizeof(url),"https://api.twitch.tv/helix/users?login=%s",j->login);
+        buf_t resp={0};
+        int rc=follow_request(url,NULL,j,1,&resp,abort_flag);
+        if(rc==0){
+            json_t *root=json_parse((const char*)resp.data);
+            const char *id=json_str(root,"data.0.id","");
+            if(numeric_id(id))snprintf(j->id,sizeof(j->id),"%s",id);
+            else {j->status=9;rc=-1;}
+            json_free(root);
+        }
+        buf_free(&resp);if(rc<0)return -1;
+    }
+    snprintf(url,sizeof(url),"https://api.twitch.tv/helix/channels/followed?user_id=%s&broadcaster_id=%s",j->user_id,j->id);
+    buf_t resp={0};int rc=follow_request(url,NULL,j,1,&resp,abort_flag);
+    if(rc==0){
+        j->state=twitch_parse_helix_follow((const char*)resp.data,j->id);
+        if(j->state<0){j->status=9;rc=-1;}
+    }
+    buf_free(&resp);return rc;
 }
 static int follow_read(twitch_follow_job_t *j,volatile int *abort_flag)
 {
     char url[96],body[512];
-    j->state=-1;j->id[0]=0;
-    if(twitch_channel_url(j->login,url,sizeof(url))<0)return -1;
+    j->state=-1;
+    if(follow_read_helix(j,abort_flag)==0)return 0;
+    if(abort_flag&&*abort_flag)return -1;
+    if(twitch_channel_url(j->login,url,sizeof(url))<0){j->status=9;return -1;}
     snprintf(body,sizeof(body),"{\"query\":\"query { user(login: \\\"%s\\\") { id self { canFollow follower { __typename } } } }\"}",j->login);
     buf_t resp={0};
-    if(follow_gql(body,j->oauth,&resp,abort_flag)==0)
+    if(follow_request("https://gql.twitch.tv/gql",body,j,0,&resp,abort_flag)==0){
         j->state=twitch_parse_follow_state((const char*)resp.data,j->id,sizeof(j->id));
+        if(j->state<0)j->status=9;
+    }
     buf_free(&resp);return j->state>=0?0:-1;
 }
 int twitch_follow_run(void *arg,volatile int *abort_flag)
 {
-    twitch_follow_job_t *j=arg;
+    twitch_follow_job_t *j=arg;j->status=4;
     if(follow_read(j,abort_flag)<0)return -1;
-    if(j->desired<0||j->state==j->desired)return 0;
-    if(j->state==2||j->desired>1||(abort_flag&&*abort_flag))return -1;
+    if(j->desired<0||j->state==j->desired){j->status=3;return 0;}
+    if(j->state==2||j->desired>1||(abort_flag&&*abort_flag)){j->status=10;return -1;}
     char body[512];
     if(j->desired==1)
-        snprintf(body,sizeof(body),"{\"query\":\"mutation { followUser(input: {targetID: \\\"%s\\\", disableNotifications: true}) { follow { __typename } error { __typename } } }\"}",j->id);
+        snprintf(body,sizeof(body),"{\"query\":\"mutation { followUser(input: {targetID: \\\"%s\\\", disableNotifications: true}) { follow { __typename } } }\"}",j->id);
     else
         snprintf(body,sizeof(body),"{\"query\":\"mutation { unfollowUser(input: {targetID: \\\"%s\\\"}) { follow { __typename } } }\"}",j->id);
     buf_t resp={0};
-    int rc=follow_gql(body,j->oauth,&resp,abort_flag);
-    json_t *root=rc==0&&resp.data?json_parse((const char*)resp.data):NULL;
-    json_t *payload=json_path(root,j->desired?"data.followUser":"data.unfollowUser");
-    json_t *error=json_get(payload,"error");
-    int accepted=payload&&payload->type==JSON_OBJECT&&!json_get(root,"errors")&&(!error||error->type==JSON_NULL);
-    json_free(root);buf_free(&resp);
-    /* Do not retry a mutation even on transport failure; re-read actual state. */
+    int rc=follow_request("https://gql.twitch.tv/gql",body,j,0,&resp,abort_flag);
+    int failure=rc<0?j->status:10;
+    buf_free(&resp);
+    /* A single mutation, followed by independent read-only verification.
+       If the state is already correct, trust the verified account state. */
     int verified=follow_read(j,abort_flag);
-    return accepted&&verified==0&&j->state==j->desired?0:-1;
+    if(verified==0&&j->state==j->desired){j->status=3;return 0;}
+    j->status=failure;
+    LOGW("follow: requested=%d verified=%d category=%d",j->desired,j->state,j->status);
+    return -1;
 }
 
 int twitch_fetch_channel_bio(const char *login,char *bio,size_t cap,volatile int *abort_flag)

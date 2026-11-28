@@ -41,10 +41,12 @@ int twitch_channel_url(const char *login, char *out, size_t cap);
 int twitch_parse_channel_bio(const char *json, char *bio, size_t cap);
 /* Unknown=-1; 0=not followed; 1=followed; 2=not eligible. */
 int twitch_parse_follow_state(const char *json,char *id,size_t cap);
+int twitch_parse_helix_follow(const char *json,const char *target);
 const char *twitch_follow_label(int state);
 const char *twitch_follow_notice(int status);
 typedef struct {
-    char login[32],oauth[128],id[32];
+    char login[32],oauth[128],id[32],user_id[32];
+    int status; /* diagnostic code, never credentials */
     int state,desired; /* desired=-1 reads; 0/1 explicit user action */
 } twitch_follow_job_t;
 

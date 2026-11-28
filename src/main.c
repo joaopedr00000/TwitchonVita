@@ -45,7 +45,7 @@ int _newlib_heap_size_user = 96 * 1024 * 1024;
 #define SETTINGS_FILE DATA_DIR "/settings.txt"
 #define LOG_FILE      DATA_DIR "/log.txt"
 #define LOG_PREV_FILE DATA_DIR "/log_prev.txt"
-#define APP_VERSION   "1.34-profile-test3"
+#define APP_VERSION   "1.34-profile-test4"
 
 #define MAX_ITEMS 100
 
@@ -1484,6 +1484,7 @@ static void profile_screen(const twitch_stream_t *s)
     twitch_follow_job_t follow={0};follow.state=-1;follow.desired=-1;
     snprintf(follow.login,sizeof(follow.login),"%s",s->login);
     snprintf(follow.oauth,sizeof(follow.oauth),"%s",g_logged?g_auth.access:"");
+    snprintf(follow.user_id,sizeof(follow.user_id),"%s",g_logged?g_auth.user_id:"");
     int follow_busy=follow.oauth[0]&&task_start(&follow_task,twitch_follow_run,&follow)==0;
     int follow_state=-1,follow_status=follow_busy?2:follow.oauth[0]?4:1;
     int loading=task_start(&task,profile_run,&job)==0,selected=s->live?0:1,armed=0;
@@ -1491,7 +1492,7 @@ static void profile_screen(const twitch_stream_t *s)
     for(;;){
         ui_input_poll(&g_in);
         if(loading&&task_done(&task)){task_wait(&task);loading=0;}
-        if(follow_busy&&task_done(&follow_task)){follow_busy=0;follow_state=follow.state;follow_status=follow_task.result==0?3:4;}
+        if(follow_busy&&task_done(&follow_task)){follow_busy=0;follow_state=follow.state;follow_status=follow.status;}
         if(!(g_in.held&(g_btn_ok|g_btn_back|SCE_CTRL_START))&&!g_in.touch_down)armed=1;
         if(armed&&(g_in.pressed&(g_btn_back|SCE_CTRL_START)))break;
         int choose=armed&&(g_in.pressed&g_btn_ok);

@@ -1074,6 +1074,7 @@ int player_run(const player_params_t *pp, char *err, int errlen)
     twitch_follow_job_t follow_job={0};follow_job.state=-1;follow_job.desired=-1;view.follow_state=-1;
     if(pp->login)snprintf(follow_job.login,sizeof(follow_job.login),"%s",pp->login);
     if(pp->chat_oauth)snprintf(follow_job.oauth,sizeof(follow_job.oauth),"%s",pp->chat_oauth);
+    if(pp->chat_sender_id)snprintf(follow_job.user_id,sizeof(follow_job.user_id),"%s",pp->chat_sender_id);
     view.follow_status=follow_job.oauth[0]?0:1;
     if(pp->login)snprintf(profile_job.login,sizeof(profile_job.login),"%s",pp->login);
     if(pp->login)snprintf(viewer_job.login,sizeof(viewer_job.login),"%s",pp->login);
@@ -1099,7 +1100,7 @@ int player_run(const player_params_t *pp, char *err, int errlen)
         unsigned pressed=input.pressed;
         int refresh_viewers=0,write_chat=0,open_profile=0;
         if(view.follow_busy&&task_done(&follow_task)){
-            view.follow_busy=0;view.follow_state=follow_job.state;view.follow_status=follow_task.result==0?3:4;last_draw=0;
+            view.follow_busy=0;view.follow_state=follow_job.state;view.follow_status=follow_job.status;last_draw=0;
         }
         if(view.profile_loading&&task_done(&profile_task)){
             view.profile_loading=0;view.profile_fetched=1;

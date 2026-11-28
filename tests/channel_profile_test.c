@@ -17,5 +17,9 @@ int main(void){
     assert(twitch_parse_follow_state("{\"data\":{\"user\":{\"id\":\"123\",\"self\":{\"canFollow\":false,\"follower\":null}}}}",id,sizeof(id))==2);
     assert(twitch_parse_follow_state("{\"errors\":[{}],\"data\":{\"user\":{\"id\":\"123\",\"self\":{\"canFollow\":true,\"follower\":null}}}}",id,sizeof(id))<0);
     assert(twitch_parse_follow_state("{\"data\":{\"user\":{\"id\":\"123\",\"self\":{}}}}",id,sizeof(id))<0);
+    assert(twitch_parse_helix_follow("{\"data\":[]}","123")==0);
+    assert(twitch_parse_helix_follow("{\"data\":[{\"broadcaster_id\":\"123\"}]}","123")==1);
+    assert(twitch_parse_helix_follow("{\"data\":[{\"broadcaster_id\":\"456\"}]}","123")==-1);
+    assert(twitch_parse_helix_follow("{\"error\":\"Unauthorized\"}","123")==-1);
     return 0;
 }
