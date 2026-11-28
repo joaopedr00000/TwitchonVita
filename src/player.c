@@ -756,7 +756,7 @@ typedef struct {
     int dropped;
     float fps_now;
     int cpu_mhz;
-    char volume_notice[96];
+    char volume_notice[96],chat_notice[96];
     const char *status;   /* centred message (buffering, ads...) or NULL */
     int menu;             /* in-player extras opened by SELECT */
     int menu_sel;
@@ -825,22 +825,13 @@ static void draw_view(const vslot_t *frame, view_t *vw)
                      vw->pp->quality,buffered/1000.0,vw->dropped);
         else if(vw->decoded_w>0&&vw->decoded_h>0)snprintf(line,sizeof(line),"%s | %dx%d",vw->pp->quality,vw->decoded_w,vw->decoded_h);
         else snprintf(line,sizeof(line),"%s",vw->pp->quality);
-        int lw=ui_text_w(0.8f,line);
+        int lw=ui_text_w(0.92f,line);
         if(lw>AW/2)lw=AW/2;
-        ui_text_fit(AW-14-lw,28,lw,C_WHITE,0.8f,line);
+        ui_text_fit(AW-14-lw,28,lw,C_WHITE,0.92f,line);
         int name_x=badge_w+26;
         ui_text_fit(name_x,29,AW-24-lw-name_x,C_WHITE,1.05f,vw->pp->channel);
         if (vw->pp->title && vw->pp->title[0]) {
-            /* single line, cut to the screen width */
-            char t[200];
-            snprintf(t, sizeof(t), "%s", vw->pp->title);
-            size_t n = strlen(t);
-            while (n > 0 && vita2d_pgf_text_width(f, 0.85f, t) > AW - 28) {
-                do { n--; } while (n > 0 && ((unsigned char)t[n] & 0xC0) == 0x80);
-                if (n + 4 <= sizeof(t))
-                    memcpy(t + n, "...", 4);
-            }
-            vita2d_pgf_draw_text(f, 14, 54, COLOR_GREY, 0.85f, t);
+            ui_text_fit(14,54,AW-28,COLOR_GREY,0.96f,vw->pp->title);
         }
         vita2d_draw_rectangle(0,SCREEN_H-36,AW,36,COLOR_OSD_BG);
         int count=vw->pp->viewer_count?*vw->pp->viewer_count:-1;
@@ -848,8 +839,8 @@ static void draw_view(const vslot_t *frame, view_t *vw)
         if(count>=0)ui_fmt_viewers(count,digits,sizeof(digits));
         else snprintf(digits,sizeof(digits),"%s",vw->viewers_busy?"...":"--");
         snprintf(caption,sizeof(caption),vt_msg("%s espectadores"),digits);
-        int vw_width=ui_text_w(0.8f,caption)+20;if(vw_width>AW/2)vw_width=AW/2;
-        ui_text_fit(AW-vw_width,SCREEN_H-12,vw_width-12,C_WHITE,0.8f,caption);
+        int vw_width=ui_text_w(0.92f,caption)+20;if(vw_width>AW/2)vw_width=AW/2;
+        ui_text_fit(AW-vw_width,SCREEN_H-12,vw_width-12,C_WHITE,0.92f,caption);
         if(vw->viewers_busy)ui_spinner(AW-vw_width-8,SCREEN_H-19,5,C_PURPLE);
         int cell=(AW-vw_width-30)/3;
         ui_hint_bounded(10,SCREEN_H-12,cell,vw->pp->btn_back==SCE_CTRL_CIRCLE?"O":"X",vt_tr(VT_I_EXIT));
@@ -866,9 +857,9 @@ static void draw_view(const vslot_t *frame, view_t *vw)
         snprintf(dims,sizeof(dims),"HLS %dx%d | AVC %dx%d | LCD %dx%d | %.2f Mbps",
             vw->pp->width,vw->pp->height,vw->decoded_w,vw->decoded_h,vw->display_w,vw->display_h,bandwidth/1000000.0);
         vita2d_draw_rectangle(0,70,AW,82,COLOR_OSD_BG);
-        ui_text_fit(10,91,AW-20,COLOR_WHITE,0.72f,a);
-        ui_text_fit(10,116,AW-20,COLOR_WHITE,0.72f,b);
-        ui_text_fit(10,141,AW-20,COLOR_WHITE,0.72f,dims);
+        ui_text_fit(10,91,AW-20,COLOR_WHITE,0.85f,a);
+        ui_text_fit(10,116,AW-20,COLOR_WHITE,0.85f,b);
+        ui_text_fit(10,141,AW-20,COLOR_WHITE,0.85f,dims);
     }
     if(vw->quality_menu){
         int n=vw->pp->variant_count,vis=n<6?n:6;
@@ -885,7 +876,7 @@ static void draw_view(const vslot_t *frame, view_t *vw)
             if(i==vw->pp->variant_current)vita2d_draw_rectangle(x+16,ry,4,row-4,C_GREEN);
             ui_text_fit(x+29,ry+28,162,C_WHITE,0.95f,v->name);
             snprintf(info,sizeof(info),"%dx%d / %.0f fps",v->width,v->height,v->fps);
-            ui_text_fit(x+205,ry+28,w-241,C_WHITE,0.82f,info);
+            ui_text_fit(x+205,ry+28,w-241,C_WHITE,0.94f,info);
         }
         vita2d_draw_rectangle(x+16,y+h-52,w/2-24,38,C_PANEL2);
         vita2d_draw_rectangle(x+w/2+8,y+h-52,w/2-24,38,C_PANEL2);
@@ -902,8 +893,8 @@ static void draw_view(const vslot_t *frame, view_t *vw)
             const char *label=labels[i]==VT_I_SHOW_INFO?
                  (vw->osd?vt_tr(VT_I_HIDE_INFO):vt_tr(VT_I_SHOW_INFO)):vt_tr(labels[i]);
             ui_text_fit(245,y+32,(i==0||i==2)?370:470,C_WHITE,1.02f,label);
-            if(i==0)ui_text_fit(625,y+32,100,C_WHITE,0.8f,chat?vt_tr(VT_I_ON):vt_tr(VT_I_OFF));
-            if(i==2)ui_text_fit(625,y+32,100,C_WHITE,0.8f,vw->pp->quality);
+            if(i==0)ui_text_fit(625,y+32,100,C_WHITE,0.92f,chat?vt_tr(VT_I_ON):vt_tr(VT_I_OFF));
+            if(i==2)ui_text_fit(625,y+32,100,C_WHITE,0.92f,vw->pp->quality);
         }
     }
     if(vw->notice&&sceKernelGetProcessTimeWide()<vw->notice_until){
@@ -1151,7 +1142,8 @@ int player_run(const player_params_t *pp, char *err, int errlen)
             else if(!chat_can_send()){
                 if(pp->chat_on)*pp->chat_on=1;
                 if(!chat_running())chat_start(pp->login,pp->chat_nick,pp->chat_oauth);
-                view.notice=vt_msg("Conectando al chat...");view.notice_until=now_us+3000000ULL;
+                chat_status(view.chat_notice,sizeof(view.chat_notice));
+                view.notice=view.chat_notice[0]?view.chat_notice:vt_msg("Conectando al chat...");view.notice_until=now_us+3000000ULL;
             }else if(open_chat_keyboard())view.ime_active=1;
             else {view.notice=vt_msg("Cannot open PS Vita keyboard");view.notice_until=now_us+3000000ULL;}
             last_draw=0;

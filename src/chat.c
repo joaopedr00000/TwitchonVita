@@ -523,7 +523,7 @@ static struct {
     char status[96];
     char login[32]; /* channel */
     char nick[32],oauth[64],outgoing[CHAT_TEXT_MAX],pending[CHAT_TEXT_MAX];
-    int writable,queued,awaiting;
+    int writable,queued,awaiting,read_only_fallback;
     unsigned long long last_send,sent_at;
     volatile int running;
     volatile int stop;         /* curl abort flag */
@@ -540,7 +540,7 @@ static void set_status(const char *fmt, ...)
     vsnprintf(buf, sizeof(buf), fmt, ap);
     va_end(ap);
     pthread_mutex_lock(&C.lock);
-    snprintf(C.status, sizeof(C.status), "%s", buf);
+    snprintf(C.status,sizeof(C.status),"%s",C.read_only_fallback?vt_msg("Secure chat TLS unavailable; anonymous read-only"):buf);
     pthread_mutex_unlock(&C.lock);
 }
 
@@ -697,12 +697,13 @@ static void *chat_thread(void *argp)
             }
         }
 
-        int joined=0,welcomed=0,auth_rejected=0;
+        int welcomed=0,auth_rejected=0,userstate_seen=0;
+        unsigned long long connected_at=sceKernelGetProcessTimeWide();
         size_t have = 0;
         unsigned long long last_rx = sceKernelGetProcessTimeWide();
         while (ok && C.running) {
             unsigned long long now=sceKernelGetProcessTimeWide();
-            if(authenticated&&!joined&&now-last_rx>15000000ULL){auth_rejected=1;break;}
+            if(authenticated&&!userstate_seen&&now-connected_at>15000000ULL){auth_rejected=1;break;}
             char outgoing[CHAT_TEXT_MAX]="";int timedout=0;
             pthread_mutex_lock(&C.lock);
             if(C.awaiting&&now-C.sent_at>10000000ULL){C.awaiting=0;C.pending[0]=0;timedout=1;}
@@ -722,6 +723,7 @@ static void *chat_thread(void *argp)
                 load_badges(room_id);
                 load_7tv(room_id);
             }
+            if(authenticated&&userstate_seen)chat_writable(1);
             size_t got = 0;
             CURLcode r = curl_easy_recv(c, rbuf + have, sizeof(rbuf) - 1 - have, &got);
             if (r == CURLE_AGAIN) {
@@ -752,11 +754,10 @@ static void *chat_thread(void *argp)
                     } else if(authenticated&&!strcmp(line.command,"001")){
                         welcomed=1;char join[64];snprintf(join,sizeof(join),"JOIN #%s\r\n",C.login);if(irc_send(c,join)<0)ok=0;
                     } else if (!strcmp(line.command, "ROOMSTATE")) {
-                        if(authenticated&&welcomed){joined=1;chat_writable(1);set_status(vt_msg("Conectado"));}
+                        if(authenticated&&welcomed)set_status(vt_msg("Conectado"));
                         if (!room_id[0])
                             irc_tag(&line, "room-id", room_id, sizeof(room_id));
                     } else if (!strcmp(line.command, "JOIN")) {
-                        if(authenticated&&welcomed){joined=1;chat_writable(1);}
                         set_status(vt_msg("Conectado"));
                         LOGI("chat: conectado a #%s", C.login);
                         push_system(vt_msg("Conectado al chat"));
@@ -765,7 +766,8 @@ static void *chat_thread(void *argp)
                         ok = 0;
                     } else if (!strcmp(line.command, "CLEARCHAT") && !line.has_trailing) {
                         push_system(vt_msg("El chat ha sido borrado por un moderador"));
-                    } else if(authenticated&&!strcmp(line.command,"USERSTATE")){
+                    } else if(authenticated&&welcomed&&!strcmp(line.command,"USERSTATE")){
+                        userstate_seen=1;
                         char own[CHAT_TEXT_MAX]="";
                         pthread_mutex_lock(&C.lock);
                         if(C.awaiting){snprintf(own,sizeof(own),"%s",C.pending);C.pending[0]=0;C.awaiting=0;}
@@ -789,7 +791,7 @@ static void *chat_thread(void *argp)
         if (c)
             curl_easy_cleanup(c);
         chat_drop_pending();
-        if(authenticated&&(!joined||auth_rejected)&&C.running){authenticated=0;LOGW("chat: secure authentication unavailable; read-only fallback");set_status(vt_msg("Secure chat TLS unavailable; anonymous read-only"));continue;}
+        if(authenticated&&(!userstate_seen||auth_rejected)&&C.running){authenticated=0;pthread_mutex_lock(&C.lock);C.read_only_fallback=1;pthread_mutex_unlock(&C.lock);LOGW("chat: secure authentication unavailable; read-only fallback");set_status(vt_msg("Secure chat TLS unavailable; anonymous read-only"));continue;}
         if (!C.running)
             break;
         set_status(vt_msg("Chat desconectado, reintentando en %d s..."), backoff);
@@ -818,7 +820,7 @@ void chat_start(const char *login,const char *nick,const char *oauth)
         return;
     chat_emotes_reset();
     C.head = C.count = 0;
-    C.writable=C.queued=C.awaiting=0;C.last_send=C.sent_at=0;C.outgoing[0]=C.pending[0]=0;
+    C.writable=C.queued=C.awaiting=C.read_only_fallback=0;C.last_send=C.sent_at=0;C.outgoing[0]=C.pending[0]=0;
     C.nick[0]=C.oauth[0]=0;
     if(nick&&oauth&&*nick&&*oauth&&strlen(nick)<sizeof(C.nick)&&strlen(oauth)<sizeof(C.oauth)&&strspn(nick,"abcdefghijklmnopqrstuvwxyz0123456789_")==strlen(nick)&&strspn(oauth,"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")==strlen(oauth)){
         snprintf(C.nick,sizeof(C.nick),"%s",nick);snprintf(C.oauth,sizeof(C.oauth),"%s",oauth);

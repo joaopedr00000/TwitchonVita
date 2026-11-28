@@ -125,11 +125,11 @@ void ui_hint_bounded(int x,int y,int width,const char *btn,const char *label)
 {
     int bw=hint_button(x,y,btn,0);if(width<bw+6)return;
     hint_button(x,y,btn,1);
-    ui_text_fit(x+bw+7,y,width-bw-9,C_GREY,0.76f,label);
+    ui_text_fit(x+bw+7,y,width-bw-9,C_WHITE,0.88f,label);
 }
 int ui_hint(int x, int y, const char *btn, const char *label)
 {
-    int bw=hint_button(x,y,btn,0),w=bw+7+ui_text_w(0.76f,label)+10;
+    int bw=hint_button(x,y,btn,0),w=bw+7+ui_text_w(0.88f,label)+10;
     ui_hint_bounded(x,y,w,btn,label);
     return w+10;
 }
