@@ -60,3 +60,7 @@ Original project: [Dexlei/VitaTwitch](https://github.com/Dexlei/VitaTwitch). TLS
 
 ### Experimental 1.34 discovery updates
 Category cover browsing, local category favorites, alternate TV grid, offline follows, profile metadata and static BTTV/FFZ emotes were inspired by [LiveVita by Cecil2121](https://github.com/Cecil2121/livevita) (MIT). These are independent adaptations. The live player remains unchanged; VOD/clip playback is not yet implemented. Native Twitch follow remains experimental and may be rejected by Twitch.
+
+
+### Smart TV layout and device favorites
+The alternate TV interface now has top navigation, a featured preview and horizontal shelves. Save on Vita is a separate persistent local bookmark, not a Twitch account follow. The Following view cycles live account follows, all account follows and local saved channels. Twitch account mutations remain experimental and may be refused; the app does not report a successful account follow unless independently confirmed.

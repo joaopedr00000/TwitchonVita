@@ -913,8 +913,8 @@ static void draw_view(const vslot_t *frame, view_t *vw)
         }
         ui_text_fit(x+24,y+270,w-48,C_GREY,.75f,twitch_follow_notice(vw->follow_status));
         ui_text_fit(x+24,y+294,w-48,C_GREY,.8f,vw->profile_url);
-        const char *labels[]={vw->follow_busy?vt_tr(VT_I_LOADING):twitch_follow_label(vw->follow_state),vt_tr(VT_I_BACK)};
-        for(int i=0;i<2;i++){
+        const char *labels[]={vw->follow_busy?vt_tr(VT_I_LOADING):twitch_follow_label(vw->follow_state),vw->pp->saved_label?vw->pp->saved_label(vw->pp->saved_has&&vw->pp->saved_has(vw->pp->login)):"Save on Vita",vt_tr(VT_I_BACK)};
+        for(int i=0;i<3;i++){
             int yy=y+310+i*44;ui_round_rect(x+24,yy,w-48,41,5,i==vw->profile_sel?C_PURPLE:C_PANEL);
             ui_text_fit(x+38,yy+26,w-76,C_WHITE,.93f,labels[i]);
         }
@@ -1127,10 +1127,12 @@ int player_run(const player_params_t *pp, char *err, int errlen)
             int choose=!!(pressed&accept);
             if(pressed&(pp->btn_back|SCE_CTRL_START|SCE_CTRL_SELECT)){view.profile_open=0;choose=0;}
             else {
-                if(pressed&(SCE_CTRL_UP|SCE_CTRL_DOWN))view.profile_sel=1-view.profile_sel;
-                for(int i=0;i<2;i++)if(ui_touch_hit(&input,116,342+i*44,728,41)){view.profile_sel=i;choose=1;break;}
+                if(pressed&SCE_CTRL_UP)view.profile_sel=(view.profile_sel+2)%3;
+                if(pressed&SCE_CTRL_DOWN)view.profile_sel=(view.profile_sel+1)%3;
+                for(int i=0;i<3;i++)if(ui_touch_hit(&input,116,342+i*44,728,41)){view.profile_sel=i;choose=1;break;}
                 if(choose){
-                    if(view.profile_sel==1)view.profile_open=0;
+                    if(view.profile_sel==2)view.profile_open=0;
+                    else if(view.profile_sel==1&&pp->saved_toggle){int rc=pp->saved_toggle(pp->login,pp->channel,pp->profile_avatar);view.notice=rc<0?"Save failed":rc?"Saved on Vita (local)":"Removed from Vita";view.notice_until=now_us+3000000ULL;}
                     else if(!follow_job.oauth[0])view.follow_status=1;
                     else if(!view.follow_busy&&view.follow_state!=2){
                         follow_job.desired=view.follow_state<0?-1:1-view.follow_state;

@@ -127,7 +127,7 @@ const char *twitch_follow_notice(int status)
     case 7:return l==2?"Falha na conexão segura (TLS).":l==1?"Error de conexión segura (TLS).":"Secure connection failed (TLS).";
     case 8:return l==2?"Falha de rede ao consultar Twitch.":l==1?"Error de red al consultar Twitch.":"Twitch network request failed.";
     case 9:return l==2?"Resposta da API incompatível.":l==1?"Respuesta de API incompatible.":"Unsupported API response.";
-    case 10:return l==2?"Twitch recusou ou não aplicou o Follow.":l==1?"Twitch no aplicó el seguimiento.":"Twitch rejected or did not apply follow.";
+    case 10:return l==2?"Follow da conta recusado. Use Salvar no Vita para acesso local.":l==1?"Twitch no aplicó el seguimiento.":"Twitch rejected or did not apply follow.";
     default:return l==2?"Follow experimental na conta Twitch.":l==1?"Seguimiento experimental en Twitch.":"Experimental Twitch account follow.";
     }
 }
@@ -172,6 +172,7 @@ int twitch_build_list_body(twitch_list_t kind, const char *query, char *out, siz
             "{\"query\":\"query { streams(first: 30%s) { edges { node { " STREAM_FIELDS
             " broadcaster { login displayName profileImageURL(width: 70) } } } } }\"}",filter);
     }
+    case TW_LIST_SAVED:
     case TW_LIST_ALL_FOLLOWS:
     case TW_LIST_CATEGORY: return -1; /* Helix path, not GQL */
     case TW_LIST_SEARCH: {
@@ -364,6 +365,7 @@ int twitch_parse_list(const char *json, twitch_list_t kind, twitch_stream_t *out
     case TW_LIST_TOP:
         edges = json_path(root, "data.streams.edges");
         break;
+    case TW_LIST_SAVED:
     case TW_LIST_ALL_FOLLOWS: break;
     case TW_LIST_CATEGORY: edges=json_path(root,"data.game.streams.edges");break;
     case TW_LIST_SEARCH:
@@ -716,6 +718,28 @@ static int fetch_category_streams(const char *query,const char *oauth,twitch_str
     buf_free(&resp);return n;
 }
 
+void twitch_refresh_saved(twitch_stream_t *items,int count,volatile int *abort_flag)
+{
+    for(int first=0;first<count&&!(abort_flag&&*abort_flag);first+=8){
+        char body[4096],err[128];size_t used=0;int n=count-first<8?count-first:8;
+        int k=snprintf(body,sizeof(body),"{\"query\":\"query {");if(k<0)return;used=(size_t)k;
+        for(int i=0;i<n;i++){
+            char url[96];if(twitch_channel_url(items[first+i].login,url,sizeof(url))<0)continue;
+            k=snprintf(body+used,sizeof(body)-used," c%d: user(login: \\\"%s\\\") { " USER_FIELDS " }",i,items[first+i].login);
+            if(k<0||(size_t)k>=sizeof(body)-used)return;used+=(size_t)k;
+        }
+        if(used+5>=sizeof(body))return;snprintf(body+used,sizeof(body)-used," }\"}");
+        buf_t b={0};if(twitch_gql(body,NULL,&b,err,sizeof(err),abort_flag)==0&&b.data){
+            json_t *root=json_parse((const char*)b.data);
+            for(int i=0;i<n;i++){
+                char path[40];snprintf(path,sizeof(path),"data.c%d",i);
+                json_t *u=json_path(root,path);if(!u||u->type!=JSON_OBJECT)continue;
+                twitch_stream_t s={0};fill_from_user(&s,u,json_get(u,"stream"));if(s.login[0]&&!strcmp(s.login,items[first+i].login))items[first+i]=s;
+            }
+            json_free(root);
+        }buf_free(&b);
+    }
+}
 int twitch_fetch_list(twitch_list_t kind, const char *query, const char *oauth,
                       twitch_stream_t *out, int max, char *err, size_t errlen,
                       volatile int *abort_flag)

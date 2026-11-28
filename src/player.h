@@ -9,6 +9,9 @@ typedef struct {
     const char *channel;    /* display name */
     const char *title;      /* stream title (may be empty) */
     const char *profile_avatar,*profile_game,*profile_label,*follow_label;
+    int (*saved_has)(const char *login);
+    int (*saved_toggle)(const char *login,const char *display,const char *avatar);
+    const char *(*saved_label)(int saved);
     const char *quality;    /* label shown in the OSD */
     int width, height;      /* from the master playlist (0 = unknown) */
     float fps;              /* from the master playlist (0 = unknown) */

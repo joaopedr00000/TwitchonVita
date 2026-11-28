@@ -15,7 +15,8 @@ typedef enum {
     TW_LIST_TOP,            /* most watched live streams */
     TW_LIST_SEARCH,         /* channel search (live and offline) */
     TW_LIST_CATEGORY,       /* authenticated category-specific live list */
-    TW_LIST_ALL_FOLLOWS     /* full account list, including offline */
+    TW_LIST_ALL_FOLLOWS,    /* full account list, including offline */
+    TW_LIST_SAVED          /* local favorites; never account follows */
 } twitch_list_t;
 
 typedef struct {
@@ -85,6 +86,7 @@ int twitch_gql(const char *body, const char *oauth, buf_t *resp,
                char *err, size_t errlen, volatile int *abort_flag);
 
 int twitch_follow_run(void *arg,volatile int *abort_flag);
+void twitch_refresh_saved(twitch_stream_t *items,int count,volatile int *abort_flag);
 int twitch_fetch_categories(const char *oauth,twitch_category_t *out,int max,volatile int *abort_flag);
 int twitch_fetch_channel_bio(const char *login, char *bio, size_t cap, volatile int *abort_flag);
 int twitch_fetch_list(twitch_list_t kind, const char *query, const char *oauth,
