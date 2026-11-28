@@ -46,7 +46,7 @@ int _newlib_heap_size_user = 96 * 1024 * 1024;
 #define SETTINGS_FILE DATA_DIR "/settings.txt"
 #define LOG_FILE      DATA_DIR "/log.txt"
 #define LOG_PREV_FILE DATA_DIR "/log_prev.txt"
-#define APP_VERSION   "1.34-media-playback-test32"
+#define APP_VERSION   "1.34-media-playback-test33"
 
 #define MAX_ITEMS 100
 
@@ -1968,10 +1968,10 @@ static int play_clip_mp4(twitch_media_t *v,char *failure,size_t failure_cap,int 
     task_t task={0};if(run_with_spinner(&task,clip_mp4_job_run,&j,"Clip MP4...")<0)return 0;
     if(j.rc<0){snprintf(failure,failure_cap,"%s",j.err);if(j.vod[0]&&j.offset>=0){snprintf(v->vod_id,sizeof(v->vod_id),"%s",j.vod);v->offset=j.offset;}return -1;}
     int pos=*position;
-    int quality_retry=0;
+    int quality_retry=0;player_frozen_frame_t frozen={0};
     for(;;){
     player_params_t pp={0};char err[192]="";int target=pos;
-    pp.recorded=2;pp.media_navigation=1;pp.can_previous=can_previous;pp.can_next=can_next;
+    pp.recorded=2;pp.frozen_frame=&frozen;pp.media_navigation=1;pp.can_previous=can_previous;pp.can_next=can_next;
     pp.duration_seconds=v->seconds>0?v->seconds:60;pp.start_seconds=pos;pp.position_seconds=&pos;pp.seek_requested=&target;pp.loading_backdrop=g_media_backdrop;
     pp.url=j.url;pp.channel=v->channel;pp.title=v->title;pp.quality="MP4";pp.height=j.height;pp.width=j.width;pp.fps=j.fps;
     pp.font=ui_font;pp.btn_back=g_btn_back;pp.profile=g_profile;pp.volume=&g_volume;
@@ -1993,10 +1993,11 @@ static int recorded_play(twitch_media_t *v,int can_previous,int can_next){
         for(int i=0;i<clip_job.n;i++)if(!clip_job.v[i].audio_only&&clip_job.v[i].height>0&&clip_job.v[i].height<=720&&!strncmp(clip_job.v[i].url,"https://",8))options[cn++]=&clip_job.v[i];
         if(!cn){modal_message("Clip",clip_job.err[0]?clip_job.err:"Source VOD unavailable");return 0;}
         int cs=vt_profile_pick(options,cn,g_profile);if(cs<0||cs>=cn)cs=0;
+        player_frozen_frame_t frozen={0};
         for(;;){
             player_params_t pp={0};char err[192]="";int target=clip_pos;
             m3u8_variant_t *q=options[cs];int requested=cs;
-            pp.recorded=1;pp.media_navigation=1;pp.can_previous=can_previous;pp.can_next=can_next;
+            pp.recorded=1;pp.frozen_frame=&frozen;pp.media_navigation=1;pp.can_previous=can_previous;pp.can_next=can_next;
             pp.timeline_offset=v->offset;pp.start_seconds=v->offset+clip_pos;pp.duration_seconds=v->seconds;pp.preview_end=v->seconds;pp.position_seconds=&clip_pos;pp.seek_requested=&target;
             pp.url=q->url;pp.channel=v->channel;pp.title=v->title;pp.quality=q->name;pp.width=q->width;pp.height=q->height;pp.fps=q->fps;
             pp.font=ui_font;pp.btn_back=g_btn_back;pp.profile=g_profile;pp.volume=&g_volume;pp.loading_backdrop=g_media_backdrop;
@@ -2018,9 +2019,10 @@ static int recorded_play(twitch_media_t *v,int can_previous,int can_next){
     int sel=vt_profile_pick(variants,n,g_profile);if(sel<0||sel>=n)sel=0;
     media_load();int index=media_find(v->id),pos=index>=0?media_saved[index].pos:0;
     if(pos<0||(v->seconds>0&&pos>=v->seconds-2))pos=0;
+    player_frozen_frame_t frozen={0};
     for(;;){
         player_params_t pp={0};m3u8_variant_t *q=variants[sel];char err[192]="";int target=pos,requested=sel;
-        pp.recorded=1;pp.loading_backdrop=g_media_backdrop;pp.media_navigation=1;pp.can_previous=can_previous;pp.can_next=can_next;pp.start_seconds=pos;pp.duration_seconds=v->seconds;pp.position_seconds=&pos;pp.seek_requested=&target;
+        pp.recorded=1;pp.frozen_frame=&frozen;pp.loading_backdrop=g_media_backdrop;pp.media_navigation=1;pp.can_previous=can_previous;pp.can_next=can_next;pp.start_seconds=pos;pp.duration_seconds=v->seconds;pp.position_seconds=&pos;pp.seek_requested=&target;
         pp.url=q->url;pp.channel=v->channel;pp.title=v->title;pp.quality=q->name;pp.width=q->width;pp.height=q->height;pp.fps=q->fps;
         pp.font=ui_font;pp.btn_back=g_btn_back;pp.profile=g_profile;pp.volume=&g_volume;pp.variants=variants;pp.variant_count=n;pp.variant_current=sel;pp.variant_requested=&requested;
         scePowerSetArmClockFrequency(vt_profile_clock(g_profile,pp.height,pp.fps));
@@ -2211,7 +2213,31 @@ static const char *profile_more_label(void){
 static int profile_has_more(const profile_catalog_t *j,int ci,int page){
     return ci<2&&j->next[0]&&j->n<PROFILE_MEDIA_MAX&&page+8>=j->n;
 }
-typedef struct {const twitch_stream_t *s;const about_job_t *details;profile_catalog_t *catalogs;int *state,*cursor;int own,sel,grid_focus,session_focus,session_yes;} profile_backdrop_t;
+/* Advance one line at a time without splitting a UTF-8 codepoint. */
+static const char *profile_bio_line(const char *p,char line[256]){
+    while(*p==' ')p++;
+    size_t n=0,best=0,space=0;
+    while(p[n]&&p[n]!='\n'){
+        size_t k=n+1;while(p[k]&&((unsigned char)p[k]&0xC0)==0x80)k++;
+        if(k>=256)break;
+        memcpy(line,p,k);line[k]=0;if(ui_text_w(.87f,line)>900)break;
+        if(p[n]==' ')space=n;
+        best=k;n=k;
+    }
+    if(!best&&*p&&*p!='\n'){best=1;while(p[best]&&((unsigned char)p[best]&0xC0)==0x80)best++;}
+    if(p[best]&&p[best]!='\n'&&space)best=space;
+    memcpy(line,p,best);line[best]=0;p+=best;
+    if(*p=='\n')p++;
+    return p;
+}
+static const char *profile_bio_page(const char *bio,int page,int draw,int *more){
+    char line[256];const char *p=bio;
+    for(int i=0;i<page*3&&*p;i++)p=profile_bio_line(p,line);
+    for(int i=0;i<3&&*p;i++){p=profile_bio_line(p,line);if(draw)ui_text_fit(30,327+i*24,900,C_GREY,.87f,line);}
+    if(more)*more=!!*p;
+    return p;
+}
+typedef struct {const twitch_stream_t *s;const about_job_t *details;profile_catalog_t *catalogs;int *state,*cursor;int own,sel,grid_focus,session_focus,session_yes,bio_page;} profile_backdrop_t;
 static profile_backdrop_t profile_bg;
 static void draw_profile_view(void){
     const twitch_stream_t *s=profile_bg.s;const about_job_t *details=profile_bg.details;
@@ -2220,9 +2246,15 @@ static void draw_profile_view(void){
     int count=own?7:4,step=924/count,ci=sel==1?0:sel==2?1:own&&sel==3?2:own&&sel==4?3:-1;
 vita2d_draw_rectangle(0,0,960,544,CLASSIC_BG);
         draw_avatar(s->avatar,s->display,25,20,84);
-        ui_text_fit(125,47,810,C_WHITE,1.35f,s->display[0]?s->display:s->login);
-        char at[64];snprintf(at,sizeof(at),"@%s",s->login);ui_text_fit(125,75,810,C_GREY,.95f,at);
-        ui_text_fit(125,103,810,s->live?C_RED:C_GREY,.9f,s->live?vt_tr(VT_I_LIVE):vt_tr(VT_I_OFFLINE));
+        int has_bio=details->about.bio[0]!=0;
+        int identity_w=has_bio?280:810;
+        ui_text_fit(125,47,identity_w,C_WHITE,1.35f,s->display[0]?s->display:s->login);
+        char at[64];snprintf(at,sizeof(at),"@%s",s->login);ui_text_fit(125,75,identity_w,C_GREY,.95f,at);
+        ui_text_fit(125,103,identity_w,s->live?C_RED:C_GREY,.9f,s->live?vt_tr(VT_I_LIVE):vt_tr(VT_I_OFFLINE));
+        if(has_bio){
+            vita2d_draw_rectangle(422,26,2,84,C_PANEL);
+            wrap_text(444,44,486,C_GREY,.92f,details->about.bio,3);
+        }
         const char *pt[]={"Ao vivo","Vídeos","Clipes","Salvos","Continuar","Sobre","Sessão"};
         const char *es[]={"En vivo","Vídeos","Clips","Guardados","Continuar","Acerca de","Sesión"};
         const char *en[]={"Live","Videos","Clips","Saved","Continue","About","Session"};
@@ -2238,7 +2270,15 @@ vita2d_draw_rectangle(0,0,960,544,CLASSIC_BG);
             ui_text_fit(490,242,440,C_GREY,.94f,line);
             snprintf(line,sizeof(line),"twitch.tv/%s",s->login);ui_text_fit(30,269,900,C_WHITE,.9f,line);
             ui_text_fit(30,302,900,C_WHITE,1.0f,ptbr?"Biografia":"Biography");
-            wrap_text(30,327,900,C_GREY,.87f,details->about.bio[0]?details->about.bio:ptbr?"Não disponível.":"Unavailable.",3);
+            int more=0,bio_page=profile_bg.bio_page;
+            if(details->about.bio[0])profile_bio_page(details->about.bio,bio_page,1,&more);
+            else ui_text_fit(30,327,900,C_GREY,.87f,ptbr?"Não disponível.":"Unavailable.");
+            if(bio_page||more){
+                char label[64];snprintf(label,sizeof(label),ptbr?"Bio — página %d":"Bio — page %d",bio_page+1);
+                ui_text_fit(30,395,440,C_GREY,.76f,label);
+                if(bio_page){ui_round_rect(620,376,142,27,4,C_PANEL);ui_text_center(691,395,C_WHITE,.75f,ptbr?"Anterior":"Previous");}
+                if(more){ui_round_rect(776,376,154,27,4,C_PANEL);ui_text_center(853,395,C_WHITE,.75f,ptbr?"Próxima":"Next");}
+            }
             ui_text_fit(30,411,900,C_WHITE,1.0f,ptbr?"Links e redes sociais":"Links and social media");
             wrap_text(30,439,900,C_GREY,.8f,details->about.links[0]?details->about.links:ptbr?"Links não disponibilizados pela Twitch.":"Links unavailable from Twitch.",3);
         }else if(own&&sel==6){
@@ -2249,7 +2289,7 @@ vita2d_draw_rectangle(0,0,960,544,CLASSIC_BG);
                 if(selected&&session_focus)ui_frame(xx,320,280,58,2,C_WHITE);
                 ui_text_center(xx+140,358,C_WHITE,1.05f,session_text(i+1));
             }
-        }else if(sel==0){ui_text_fit(30,235,900,C_WHITE,1.1f,s->live?s->title:vt_tr(VT_I_OFFLINE));wrap_text(30,285,900,C_GREY,.9f,details->about.bio,4);}
+        }else if(sel==0){ui_text_fit(30,235,900,C_WHITE,1.1f,s->live?s->title:vt_tr(VT_I_OFFLINE));}
         else if(ci>=0){
             profile_catalog_t *j=&catalogs[ci];
             if(state[ci]==0||state[ci]==1){ui_spinner(480,315,18,C_PURPLE);ui_text_center(480,352,C_WHITE,1.f,vt_tr(VT_I_LOADING));}
@@ -2274,7 +2314,7 @@ vita2d_draw_rectangle(0,0,960,544,CLASSIC_BG);
         if(own&&sel==6){
             ui_hint_bounded(25,520,440,g_ok_name,vt_msg("Aceptar"));
             ui_hint_bounded(500,520,420,g_back_name,vt_tr(VT_I_BACK));
-        }else ui_text_fit(25,520,ci>=0?560:910,C_WHITE,.82f,ci>=0?(vt_lang_current()==2?"Setas: navegar | L/R: páginas | X: abrir | Triângulo: atualizar | O: voltar":"D-pad: navigate | L/R: pages | Confirm: open | Triangle: refresh | Back"):(vt_lang_current()==2?"Esquerda/direita: abas | Confirmar | Voltar":"Left/right: tabs | Confirm | Back"));
+        }else ui_text_fit(25,520,ci>=0?560:910,C_WHITE,.82f,ci>=0?(vt_lang_current()==2?"Setas: navegar | L/R: páginas | X: abrir | Triângulo: atualizar | O: voltar":"D-pad: navigate | L/R: pages | Confirm: open | Triangle: refresh | Back"):(sel==(own?5:3)?(vt_lang_current()==2?"Esq./dir.: abas | Cima/baixo: bio | Voltar":"Left/right: tabs | Up/down: bio | Back"):(vt_lang_current()==2?"Esquerda/direita: abas | Confirmar | Voltar":"Left/right: tabs | Confirm | Back")));
 
 }
 /* One cancellable anonymous manifest probe at a time, only for displayed
@@ -2296,7 +2336,7 @@ static void channel_full_profile(const twitch_stream_t *channel,int own,int retu
     static profile_probe_t probe;memset(&probe,0,sizeof(probe));
     unsigned char checked[4][PROFILE_MEDIA_MAX]={{0}};
     int sel=0,armed=0,grid_focus=0,session_focus=0,session_yes=0;const int count=own?7:4,step=924/count;
-    int swipe_consumed=0;
+    int swipe_consumed=0,bio_page=0;
     for(;;){
         ui_input_poll(&g_in);unsigned b=g_in.pressed;
         if(!(g_in.held&(g_btn_ok|g_btn_back))&&!g_in.touch_down)armed=1;
@@ -2403,7 +2443,7 @@ static void channel_full_profile(const twitch_stream_t *channel,int own,int retu
                     armed=0;profile_probe_stop(&probe);
                     /* Finish another catalog's worker before entering the player. */
                     if(active>=0){task_cancel(&mt);while(!task_done(&mt))sceKernelDelayThread(10000);task_wait(&mt);state[active]=state[active]==4?2:0;active=-1;}
-                    profile_bg=(profile_backdrop_t){&s,&details,catalogs,state,cursor,own,sel,grid_focus,session_focus,session_yes};
+                    profile_bg=(profile_backdrop_t){&s,&details,catalogs,state,cursor,own,sel,grid_focus,session_focus,session_yes,bio_page};
                     g_media_backdrop=draw_profile_view;
                     for(;;){
                         int rc=recorded_play(&j->out[*pos],*pos>0,*pos+1<j->n);
@@ -2425,6 +2465,10 @@ static void channel_full_profile(const twitch_stream_t *channel,int own,int retu
                     }
                 }
             }
+        }else if(sel==(own?5:3)){
+            int more=0;profile_bio_page(details.about.bio,bio_page,0,&more);
+            if(bio_page&&((b&SCE_CTRL_UP)||ui_touch_hit(&g_in,620,376,142,27)))bio_page--;
+            else if(more&&((b&SCE_CTRL_DOWN)||ui_touch_hit(&g_in,776,376,154,27)))bio_page++;
         }else if(own&&sel==6){
             /* Selecting the tab only displays the question. The default is No.
              * A touch on either button works without D-pad focus. */
@@ -2450,7 +2494,7 @@ static void channel_full_profile(const twitch_stream_t *channel,int own,int retu
             armed=0;
             if(sel==0){profile_probe_stop(&probe);if(active>=0){task_cancel(&mt);while(!task_done(&mt))sceKernelDelayThread(10000);task_wait(&mt);active=-1;}if(return_to_live)return;if(s.live){play_channel(s.login,s.display,s.title,s.viewers);return;}else toast(vt_tr(VT_I_OFFLINE));}
         }
-        profile_bg=(profile_backdrop_t){&s,&details,catalogs,state,cursor,own,sel,grid_focus,session_focus,session_yes};
+        profile_bg=(profile_backdrop_t){&s,&details,catalogs,state,cursor,own,sel,grid_focus,session_focus,session_yes,bio_page};
         frame_begin();draw_profile_view();
         frame_end();
     }

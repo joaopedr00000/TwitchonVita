@@ -660,9 +660,14 @@ static int vpipe_start(vpipe_t *vp, vdec_t *v, const player_params_t *pp, char *
 
     /* Limit the initial texture ring to leave GPU memory for the UI. */
     size_t frame_bytes = (size_t)v->w * v->h * 4;
-    int want = (int)((18u * 1024 * 1024) / frame_bytes);
+    size_t budget=18u*1024u*1024u;
+    if(pp->frozen_frame&&pp->frozen_frame->tex){
+        size_t held=(size_t)vita2d_texture_get_stride(pp->frozen_frame->tex)*vita2d_texture_get_height(pp->frozen_frame->tex);
+        budget=held<budget?budget-held:0;
+    }
+    int want = (int)(budget / frame_bytes);
     if (want > 6) want = 6;
-    if (want < DEC_PICS + 1) want = DEC_PICS + 1;
+    if (want < DEC_PICS + 1) want = DEC_PICS + 1; /* decoder requires four slots */
     LOGI("startup: texture ring %dx%d target=%d", v->w, v->h, want);
     for (int i = 0; i < want; i++) {
         LOGI("startup: allocate texture %d/%d", i+1, want);
@@ -795,8 +800,18 @@ static int open_chat_keyboard(vt_ime_pump_t pump,void *ctx){
     LOGI("chat: sceImeDialogInit rc=%08X",(unsigned)rc);
     return rc;
 }
+static void frozen_release(player_frozen_frame_t *f){
+    if(f&&f->tex){vita2d_wait_rendering_done();vita2d_free_texture(f->tex);memset(f,0,sizeof(*f));}
+}
 static void draw_view(const vslot_t *frame, view_t *vw)
 {
+    vslot_t frozen={0};
+    int showing_frozen=0;
+    if(!frame&&vw->pp->recorded&&vw->pp->frozen_frame&&vw->pp->frozen_frame->tex){
+        const player_frozen_frame_t *f=vw->pp->frozen_frame;
+        frozen.tex=f->tex;frozen.w=f->w;frozen.h=f->h;
+        frame=&frozen;showing_frozen=1;
+    }
     int chat = vw->pp->chat_on && *vw->pp->chat_on;
     int AW = chat ? SCREEN_W - CHAT_PANEL_W : SCREEN_W; /* video area width */
 
@@ -822,8 +837,8 @@ static void draw_view(const vslot_t *frame, view_t *vw)
          * just because the master playlist claims a smaller size. */
         int tw=(int)vita2d_texture_get_width(frame->tex),th=(int)vita2d_texture_get_height(frame->tex);
         int vis_w=frame->w<tw?frame->w:tw,vis_h=frame->h<th?frame->h:th;
-        if(vw->pp->width>0&&vis_w==ALIGN16(vw->pp->width))vis_w=vw->pp->width;
-        if(vw->pp->height>0&&vis_h==ALIGN16(vw->pp->height))vis_h=vw->pp->height;
+        if(!showing_frozen&&vw->pp->width>0&&vis_w==ALIGN16(vw->pp->width))vis_w=vw->pp->width;
+        if(!showing_frozen&&vw->pp->height>0&&vis_h==ALIGN16(vw->pp->height))vis_h=vw->pp->height;
         vw->decoded_w=frame->w;vw->decoded_h=frame->h;
         float sx = (float)AW / vis_w;
         float sy = (float)SCREEN_H / vis_h;
@@ -1034,7 +1049,7 @@ static void ime_player_pump(void *arg){
 
 /* ------------------------------------------------------------------- main */
 
-int player_run(const player_params_t *pp, char *err, int errlen)
+static int player_run_impl(const player_params_t *pp, char *err, int errlen)
 {
     player_t *pl = &g_pl;
     vpipe_t *vp = &g_vp;
@@ -1060,6 +1075,10 @@ int player_run(const player_params_t *pp, char *err, int errlen)
     img_clear();
     img_frame();
     LOGI("startup: thumbnail cache cleared; open decoder");
+    if(pp->frozen_frame&&pp->frozen_frame->tex){
+        view.status=vt_tr(VT_I_LOADING);
+        draw_view(NULL,&view);
+    }
 
     if (vdec_open(&vdec, pp->width, pp->height, err, errlen) < 0) {
         pthread_mutex_destroy(&pl->clock.lock);
@@ -1539,6 +1558,10 @@ int player_run(const player_params_t *pp, char *err, int errlen)
         if (next >= 0) {
             uint64_t t_draw = sceKernelGetProcessTimeWide();
             draw_view(&vp->slot[next], &view); /* ends with vita2d_wait_rendering_done() */
+            if(pp->frozen_frame&&pp->frozen_frame->tex){
+                frozen_release(pp->frozen_frame);
+                LOGI("seek: first replacement frame presented; frozen texture released");
+            }
             uint64_t t_end = sceKernelGetProcessTimeWide();
             /* the GPU is done with the previous frame: give its texture back */
             pthread_mutex_lock(&vp->lock);
@@ -1588,10 +1611,31 @@ int player_run(const player_params_t *pp, char *err, int errlen)
     if(view.viewers_busy){task_cancel(&viewer_task);while(!task_done(&viewer_task))sceKernelDelayThread(10000);}
     if(view.profile_loading){task_cancel(&profile_task);while(!task_done(&profile_task))sceKernelDelayThread(10000);}
     if(view.follow_busy){task_cancel(&follow_task);while(!task_done(&follow_task))sceKernelDelayThread(10000);}
+    /* Show the loading state before any potentially blocking teardown.
+     * SLOT_SHOWN is not a decode target. No copy or new texture allocation. */
+    int keep=pp->recorded&&ret==PLAYER_SEEK&&pp->frozen_frame;
+    if(keep){
+        view.status=vt_tr(VT_I_LOADING);view.osd=1;
+        view.seek=(vt_seek_burst){0};
+        if(pp->seek_requested)view.recording_pos=*pp->seek_requested;
+        pl->audio_running=0;
+        draw_view(cur>=0?&vp->slot[cur]:NULL,&view);
+    }
     /* teardown: unblock producers first, then stop threads */
     pq_abort(&pl->vq);
     pq_abort(&pl->aq);
     vpipe_stop(vp);
+    if(keep&&cur>=0&&vp->slot[cur].tex&&vp->slot[cur].w>0&&vp->slot[cur].h>0){
+        vslot_t *slot=&vp->slot[cur];player_frozen_frame_t *f=pp->frozen_frame;
+        vita2d_wait_rendering_done();
+        frozen_release(f);
+        int tw=(int)vita2d_texture_get_width(slot->tex),th=(int)vita2d_texture_get_height(slot->tex);
+        f->w=slot->w<tw?slot->w:tw;f->h=slot->h<th?slot->h:th;
+        if(pp->width>0&&f->w==ALIGN16(pp->width))f->w=pp->width;
+        if(pp->height>0&&f->h==ALIGN16(pp->height))f->h=pp->height;
+        f->tex=slot->tex;slot->tex=NULL; /* transfer ownership before vpipe_free */
+        LOGI("seek: retaining last decoded texture %dx%d",f->w,f->h);
+    }
     chat_stop();
     chat_set_session(NULL);
     hls_stop(&pl->hls);
@@ -1606,5 +1650,12 @@ out_queues:
     chat_view_free();
     img_set_deferred_free(0);
     pthread_mutex_destroy(&pl->clock.lock);
+    return ret;
+}
+
+int player_run(const player_params_t *pp,char *err,int errlen){
+    int ret=player_run_impl(pp,err,errlen);
+    /* Also covers all startup errors and exits before the first new frame. */
+    if(ret!=PLAYER_SEEK)frozen_release(pp->frozen_frame);
     return ret;
 }

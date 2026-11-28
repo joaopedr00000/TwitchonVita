@@ -5,6 +5,12 @@
 #include "m3u8.h"
 #include "auth.h"
 
+/* One existing decoded texture, owned across a seek by the calling media loop. */
+typedef struct {
+    vita2d_texture *tex;
+    int w,h;
+} player_frozen_frame_t;
+
 typedef struct {
     const char *url;        /* media playlist of the chosen quality */
     const char *channel;    /* display name */
@@ -29,6 +35,7 @@ typedef struct {
     int recorded,start_seconds,duration_seconds;
     int timeline_offset; /* source VOD offset for a clip; display relative position */
     void (*loading_backdrop)(void);
+    player_frozen_frame_t *frozen_frame; /* optional; zero-initialized by the media loop */
     int media_navigation,can_previous,can_next;
     int preview_end;
     const char *preview_playlist;
