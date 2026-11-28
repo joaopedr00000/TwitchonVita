@@ -1198,6 +1198,7 @@ int player_run(const player_params_t *pp, char *err, int errlen)
                     last_draw=0;
                 }
                 if(pressed&SCE_CTRL_TRIANGLE){view.osd=!view.osd;last_draw=0;}
+                if(pressed&SCE_CTRL_SQUARE){ret=PLAYER_CREATE_CLIP;should_exit=1;}
                 if(pp->seek_requested&&view.recording_duration>0){
                     int target=-1;
                     if(pressed&(SCE_CTRL_LTRIGGER|SCE_CTRL_RTRIGGER))target=view.recording_pos+(pressed&SCE_CTRL_RTRIGGER?30:-30);
@@ -1247,6 +1248,7 @@ int player_run(const player_params_t *pp, char *err, int errlen)
                 if(pressed&pp->btn_back)should_exit=1;
                 if(pressed&SCE_CTRL_START)open_profile=1;
                 if(pressed&SCE_CTRL_RTRIGGER)write_chat=1;
+                if(pressed&SCE_CTRL_LTRIGGER){ret=PLAYER_CREATE_CLIP;should_exit=1;}
                 if(pressed&SCE_CTRL_TRIANGLE){view.osd=!view.osd;osd_until=view.osd?now_us+5000000ULL:0;refresh_viewers=view.osd;last_draw=0;}
                 if((pressed&SCE_CTRL_SQUARE)&&pp->chat_on&&pp->login){
                     *pp->chat_on=!*pp->chat_on;

@@ -10,6 +10,7 @@
 #ifndef VT_NO_NET
 #include "http.h"
 #include "tls_trust.h"
+#include <psp2/kernel/threadmgr.h>
 #endif
 
 int twitch_sanitize_login(const char *in, char *out, size_t cap)
@@ -886,6 +887,123 @@ out:
     buf_free(&resp);
     http_free(c);
     return ret;
+}
+
+/* Official Helix requests with verified TLS. Never retry a POST. */
+static int media_request(const char *url,const char *oauth,const char *post,buf_t *b,long *status,volatile int *abort_flag){
+    if(!oauth||!*oauth||strpbrk(oauth,"\r\n")||strlen(oauth)>100)return -1;
+    CURL *c=http_new();if(!c)return -1;
+    if(vt_tls_configure(c)!=CURLE_OK){http_free(c);return -1;}
+    curl_easy_setopt(c,CURLOPT_FOLLOWLOCATION,0L);
+    char auth[160];snprintf(auth,sizeof(auth),"Authorization: Bearer %s",oauth);
+    struct curl_slist *h=NULL,*next;
+    h=curl_slist_append(h,"Client-ID: " TWITCH_CLIENT_ID);
+    next=curl_slist_append(h,auth);if(!next){curl_slist_free_all(h);http_free(c);return -1;}h=next;
+    int rc=http_request(c,url,post,h,b,status,abort_flag);
+    curl_slist_free_all(h);http_free(c);return rc;
+}
+static int media_user_id(const char *login,const char *oauth,char *id,size_t cap,volatile int *abort_flag){
+    char check[96],url[160];if(twitch_channel_url(login,check,sizeof(check))<0)return -1;
+    snprintf(url,sizeof(url),"https://api.twitch.tv/helix/users?login=%s",login);
+    buf_t b={0};long status=0;int rc=-1;
+    if(!media_request(url,oauth,NULL,&b,&status,abort_flag)&&status==200){
+        json_t *root=json_parse((const char*)b.data);const char *s=json_str(root,"data.0.id","");
+        if(numeric_id(s)){snprintf(id,cap,"%s",s);rc=0;}json_free(root);
+    }buf_free(&b);return rc;
+}
+static int media_duration(const char *s){
+    int total=0;
+    while(s&&*s){char *end;long n=strtol(s,&end,10);if(end==s||n<0||n>86400)return 0;
+        int mul=*end=='h'?3600:*end=='m'?60:*end=='s'?1:0;if(!mul)return 0;
+        if(n*mul>604800-total)return 0;total+=(int)(n*mul);s=end+1;
+    }return total;
+}
+static int clip_id_ok(const char *s){return s&&*s&&strlen(s)<80&&strspn(s,"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")==strlen(s);}
+int twitch_fetch_media(const char *login,const char *oauth,int kind,twitch_media_t *out,int max,char *err,size_t errlen,volatile int *abort_flag){
+    char id[32],url[256];buf_t b={0};long status=0;int n=-1;
+    if(media_user_id(login,oauth,id,sizeof(id),abort_flag)<0){snprintf(err,errlen,"Sign in to load videos / Entre na conta para carregar vídeos");return -1;}
+    static const char *types[]={"all","archive","highlight","upload"};
+    if(kind==4)snprintf(url,sizeof(url),"https://api.twitch.tv/helix/clips?broadcaster_id=%s&first=30",id);
+    else snprintf(url,sizeof(url),"https://api.twitch.tv/helix/videos?user_id=%s&first=30&type=%s",id,types[kind>=0&&kind<4?kind:0]);
+    if(!media_request(url,oauth,NULL,&b,&status,abort_flag)&&status==200){
+        json_t *root=json_parse((const char*)b.data),*arr=json_get(root,"data");
+        if(arr&&arr->type==JSON_ARRAY){
+            n=0;for(json_t *j=arr->child;j&&n<max;j=j->next){
+                const char *mid=json_str(j,"id","");
+                if(kind==4?!clip_id_ok(mid):!numeric_id(mid))continue;
+                twitch_media_t *v=&out[n++];memset(v,0,sizeof(*v));
+                snprintf(v->id,sizeof(v->id),"%s",mid);snprintf(v->title,sizeof(v->title),"%s",json_str(j,"title",""));
+                snprintf(v->date,sizeof(v->date),"%s",json_str(j,"created_at",""));
+                snprintf(v->broadcaster,sizeof(v->broadcaster),"%s",id);snprintf(v->channel,sizeof(v->channel),"%s",login);
+                snprintf(v->type,sizeof(v->type),"%s",kind==4?"clip":json_str(j,"type","archive"));
+                snprintf(v->url,sizeof(v->url),"%s",json_str(j,"url",""));
+                category_image_url(json_str(j,"thumbnail_url",""),v->thumb,sizeof(v->thumb),160,90);
+                v->seconds=kind==4?(int)json_num(j,"duration",0):media_duration(json_str(j,"duration",""));
+                v->offset=(int)json_num(j,"vod_offset",-1);
+                snprintf(v->vod_id,sizeof(v->vod_id),"%s",json_str(j,"video_id",""));
+            }
+        }json_free(root);
+    }
+    if(n<0)snprintf(err,errlen,"Twitch video catalog unavailable (HTTP %ld)",status);buf_free(&b);return n;
+}
+int twitch_vod_variants(const char *id,const char *oauth,m3u8_variant_t *out,int max,char *err,size_t errlen,volatile int *abort_flag){
+    if(!numeric_id(id))return -1;
+    char body[512];snprintf(body,sizeof(body),"{\"query\":\"query { videoPlaybackAccessToken(id: \\\"%s\\\", params: {platform: \\\"web\\\", playerBackend: \\\"mediaplayer\\\", playerType: \\\"site\\\"}) { value signature } }\"}",id);
+    CURL *c=http_new();buf_t b={0};long status=0;int n=-1;struct curl_slist *h=NULL;
+    if(!c||vt_tls_configure(c)!=CURLE_OK)goto done;
+    curl_easy_setopt(c,CURLOPT_FOLLOWLOCATION,0L);
+    h=curl_slist_append(h,"Client-ID: " TWITCH_CLIENT_ID);if(!h)goto done;
+    struct curl_slist *next=curl_slist_append(h,"Content-Type: text/plain;charset=UTF-8");if(!next)goto done;h=next;
+    if(oauth&&*oauth&&!strpbrk(oauth,"\r\n")){char a[160];snprintf(a,sizeof(a),"Authorization: OAuth %s",oauth);next=curl_slist_append(h,a);if(!next)goto done;h=next;}
+    if(http_request(c,"https://gql.twitch.tv/gql",body,h,&b,&status,abort_flag)<0||status!=200)goto done;
+    json_t *root=json_parse((const char*)b.data);
+    const char *token=json_str(root,"data.videoPlaybackAccessToken.value",""),*sig=json_str(root,"data.videoPlaybackAccessToken.signature","");
+    char *et=*token?curl_easy_escape(c,token,0):NULL,*es=*sig?curl_easy_escape(c,sig,0):NULL;
+    static char url[16384];
+    int len=et&&es?snprintf(url,sizeof(url),"https://usher.ttvnw.net/vod/%s.m3u8?allow_source=true&allow_audio_only=false&supported_codecs=h264&nauth=%s&nauthsig=%s&player=twitchweb",id,et,es):-1;
+    curl_free(et);curl_free(es);json_free(root);
+    if(len<0||(size_t)len>=sizeof(url))goto done;
+    if(http_request(c,url,NULL,NULL,&b,&status,abort_flag)<0||status!=200)goto done;
+    n=m3u8_parse_master((const char*)b.data,out,max);
+    if(n<=0)n=-1;
+done:
+    if(n<0)snprintf(err,errlen,"VOD unavailable / Vídeo indisponível (HTTP %ld)",status);
+    curl_slist_free_all(h);buf_free(&b);http_free(c);return n;
+}
+int twitch_create_clip(void *arg,volatile int *abort_flag){
+    twitch_clip_job_t *j=arg;buf_t b={0};long status=0;char url[768];
+    j->confirmed=0;j->id[0]=j->url[0]=0;
+    if(!j->oauth[0]){snprintf(j->error,sizeof(j->error),"Sign in / Entre na conta");return -1;}
+    if(!numeric_id(j->broadcaster)&&media_user_id(j->login,j->oauth,j->broadcaster,sizeof(j->broadcaster),abort_flag)<0){snprintf(j->error,sizeof(j->error),"Channel unavailable");return -1;}
+    if(j->duration<5||j->duration>60)return -1;
+    if(j->vod_id[0]){
+        if(!numeric_id(j->vod_id)||!numeric_id(j->user_id)||j->offset<j->duration){snprintf(j->error,sizeof(j->error),"Invalid clip range");return -1;}
+        CURL *c=http_new();if(!c)return -1;char *title=curl_easy_escape(c,j->title[0]?j->title:"VitaTwitch clip",0);
+        if(!title){http_free(c);return -1;}
+        snprintf(url,sizeof(url),"https://api.twitch.tv/helix/videos/clips?broadcaster_id=%s&editor_id=%s&vod_id=%s&vod_offset=%d&duration=%d&title=%s",j->broadcaster,j->user_id,j->vod_id,j->offset,j->duration,title);
+        curl_free(title);http_free(c);
+    }else snprintf(url,sizeof(url),"https://api.twitch.tv/helix/clips?broadcaster_id=%s&duration=%d",j->broadcaster,j->duration);
+    if(media_request(url,j->oauth,"",&b,&status,abort_flag)<0||status!=202){
+        snprintf(j->error,sizeof(j->error),status==401?"Authorize again / Entre novamente (clip scope)":status==403?"Clips blocked or editor permission required":status==404?"Stream or VOD unavailable":"Clip request failed (HTTP %ld)",status);goto done;
+    }
+    json_t *root=json_parse((const char*)b.data);const char *id=json_str(root,"data.0.id","");
+    if(clip_id_ok(id))snprintf(j->id,sizeof(j->id),"%s",id);
+    json_free(root);
+    if(!j->id[0]){snprintf(j->error,sizeof(j->error),"Twitch did not return a clip ID");goto done;}
+    snprintf(j->url,sizeof(j->url),"https://clips.twitch.tv/%s",j->id);
+    snprintf(url,sizeof(url),"https://api.twitch.tv/helix/clips?id=%s",j->id);
+    for(int i=0;i<20&&!(abort_flag&&*abort_flag);i++){
+        if(i)for(int k=0;k<30&&!(abort_flag&&*abort_flag);k++)sceKernelDelayThread(100000);
+        if(abort_flag&&*abort_flag)break;
+        if(!media_request(url,j->oauth,NULL,&b,&status,abort_flag)&&status==200){
+            root=json_parse((const char*)b.data);
+            if(!strcmp(json_str(root,"data.0.id",""),j->id))j->confirmed=1;
+            json_free(root);if(j->confirmed)break;
+        }
+    }
+    if(!j->confirmed)snprintf(j->error,sizeof(j->error),"Clip requested, not confirmed");
+done:
+    buf_free(&b);return j->confirmed?0:-1;
 }
 
 int twitch_get_variants(const char *channel,const char *oauth,m3u8_variant_t *out,int max,

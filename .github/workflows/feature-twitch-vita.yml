@@ -25,6 +25,8 @@ jobs:
           /tmp/vt-policy-test
           gcc -std=c11 -Wall -Wextra -Isrc tests/m3u8_ad_test.c src/m3u8.c -o /tmp/vt-m3u8-ad-test
           /tmp/vt-m3u8-ad-test
+          gcc -std=c11 -Wall -Wextra -Isrc tests/vod_playlist_test.c src/m3u8.c -o /tmp/vt-vod-test
+          /tmp/vt-vod-test
           gcc -DVT_NO_NET -std=gnu11 -Wall -Wextra -Isrc tests/twitch_region_test.c src/twitch.c src/json.c src/log.c src/i18n.c -o /tmp/vt-region-test
           /tmp/vt-region-test
           gcc -DVT_NO_NET -std=gnu11 -Wall -Wextra -Isrc tests/channel_profile_test.c src/twitch.c src/json.c src/log.c src/i18n.c -o /tmp/vt-profile-test
@@ -118,13 +120,13 @@ jobs:
             assert b'Twitch\x00' in sfo
           print('PASS experimental VitaSDK VPK, version 01.34, title ID and trusted IRC CA bundle')
           PY
-          cp build-ci/VitaTwitch.vpk Twitch-1.34-UnifiedFollowTV10.vpk
-          sha256sum Twitch-1.34-UnifiedFollowTV10.vpk > SHA256SUMS.txt
+          cp build-ci/VitaTwitch.vpk Twitch-1.34-Recordings11.vpk
+          sha256sum Twitch-1.34-Recordings11.vpk > SHA256SUMS.txt
       - uses: actions/upload-artifact@v4
         with:
-          name: Twitch-1.34-UnifiedFollowTV10-EXPERIMENTAL
+          name: Twitch-1.34-Recordings11-EXPERIMENTAL
           path: |
-            Twitch-1.34-UnifiedFollowTV10.vpk
+            Twitch-1.34-Recordings11.vpk
             SHA256SUMS.txt
             ca-bundle.sha256
           retention-days: 14

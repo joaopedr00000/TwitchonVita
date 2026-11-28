@@ -46,6 +46,7 @@ typedef struct {
 #define PLAYER_CHANGE_QUALITY 4
 #define PLAYER_SEEK 5
 #define PLAYER_RECORDING_END 6
+#define PLAYER_CREATE_CLIP 7
 int player_run(const player_params_t *pp, char *err, int errlen);
 
 #endif
