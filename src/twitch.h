@@ -50,6 +50,7 @@ int twitch_channel_url(const char *login, char *out, size_t cap);
 int twitch_build_vod_url(const char *id,const char *token,const char *sig,unsigned nonce,char *out,size_t cap);
 const char *twitch_vod_rejection(const char *body);
 const char *twitch_vod_access_message(const char *reason);
+int twitch_video_subscriber_type(const char *type);
 int twitch_parse_clip_source(const char *json,char *vod,size_t cap,int *offset);
 int twitch_parse_channel_bio(const char *json, char *bio, size_t cap);
 /* Unknown=-1; 0=not followed; 1=followed; 2=not eligible. */
@@ -87,7 +88,7 @@ void twitch_sort_by_viewers(twitch_stream_t *s, int n);
 
 typedef struct {int followers;char created[32],bio[512],links[384];} twitch_about_t;
 #define VT_MEDIA_MAX 30
-typedef struct {char id[80],title[192],thumb[192],date[32],broadcaster[32],channel[64],type[16],url[192];int seconds,offset;char vod_id[32];} twitch_media_t;
+typedef struct {char id[80],title[192],thumb[192],date[32],broadcaster[32],channel[64],type[16],url[192];int seconds,offset,subscriber_only;char vod_id[32];} twitch_media_t;
 typedef struct {char login[32],oauth[128],user_id[32],vod_id[32],broadcaster[32],title[96],id[80],url[192],error[192];int duration,offset,confirmed;} twitch_clip_job_t;
 #ifndef VT_NO_NET
 #include "buf.h"

@@ -3,6 +3,7 @@
 #include <assert.h>
 #include <string.h>
 int main(void){
+    if(!twitch_video_subscriber_type("SUB_ONLY_LIVE")||twitch_video_subscriber_type("UNKNOWN")||twitch_video_subscriber_type("ALL_ACCESS_PASS")||twitch_video_subscriber_type(NULL))return 1;
     char url[96],bio[32];
     assert(twitch_channel_url("gaules",url,sizeof(url))==0);
     assert(!strcmp(url,"https://www.twitch.tv/gaules"));

@@ -133,6 +133,9 @@ const char *twitch_vod_access_message(const char *reason){
     if(lang<0||lang>=VT_LANG_COUNT)lang=0;
     return reason&&!strcmp(reason,"SUBSCRIPTION")?subscriber[lang]:denied[lang];
 }
+int twitch_video_subscriber_type(const char *type){
+    return type&&(!strcmp(type,"SUB_ONLY_LIVE")||!strcmp(type,"SUB_ONLY_VOD")||!strcmp(type,"SUBSCRIBER_ONLY"));
+}
 int twitch_parse_clip_source(const char *json,char *vod,size_t cap,int *offset){
     if(!json||!vod||!cap||!offset)return -1;
     json_t *root=json_parse(json);
@@ -1060,7 +1063,7 @@ static int media_public_gql(const char *login,int kind,twitch_media_t *out,int m
     if(max>VT_MEDIA_MAX)max=VT_MEDIA_MAX;
     const char *types[]={"","ARCHIVE","HIGHLIGHT","UPLOAD"};
     if(kind==4)
-        snprintf(body,sizeof(body),"{\"query\":\"query { user(login: \\\"%s\\\") { id clips(first: %d, criteria: {period: ALL_TIME, sort: VIEWS_DESC}) { edges { node { slug title createdAt durationSeconds url } } } } }\"}",login,max);
+        snprintf(body,sizeof(body),"{\"query\":\"query { user(login: \\\"%s\\\") { id clips(first: %d, criteria: {period: ALL_TIME, sort: VIEWS_DESC}) { edges { node { slug title createdAt durationSeconds url thumbnailURL } } } } }\"}",login,max);
     else{
         char filter[64]="";if(kind>=1&&kind<=3)snprintf(filter,sizeof(filter),", type: %s",types[kind]);
         snprintf(body,sizeof(body),"{\"query\":\"query { user(login: \\\"%s\\\") { id videos(first: %d%s, sort: TIME) { edges { node { id title createdAt lengthSeconds broadcastType previewThumbnailURL(width:160,height:90) } } } } }\"}",login,max,filter);
@@ -1073,6 +1076,17 @@ static int media_public_gql(const char *login,int kind,twitch_media_t *out,int m
     buf_t b={0};int n=-1;
     *net=trust==CURLE_OK?http_request(c,"https://gql.twitch.tv/gql",body,h,&b,status,abort_flag):-(int)trust;
     if((trust!=CURLE_OK||*net==-(int)CURLE_SSL_CACERT_BADFILE)&&!*status&&!(abort_flag&&*abort_flag))*net=http_native_read("https://gql.twitch.tv/gql",body,NULL,1,&b,status,abort_flag);
+    if(kind==4&&!*net&&*status==200&&b.data){
+        json_t *check_root=json_parse((const char*)b.data);
+        int retry=json_get(check_root,"errors")!=NULL;json_free(check_root);
+        if(retry&&!(abort_flag&&*abort_flag)){
+            char *field=strstr(body," thumbnailURL");
+            if(field)memmove(field,field+strlen(" thumbnailURL"),strlen(field+strlen(" thumbnailURL"))+1);
+            buf_free(&b);memset(&b,0,sizeof(b));*status=0;
+            *net=trust==CURLE_OK?http_request(c,"https://gql.twitch.tv/gql",body,h,&b,status,abort_flag):-(int)trust;
+            if((trust!=CURLE_OK||*net==-(int)CURLE_SSL_CACERT_BADFILE)&&!*status&&!(abort_flag&&*abort_flag))*net=http_native_read("https://gql.twitch.tv/gql",body,NULL,1,&b,status,abort_flag);
+        }
+    }
     if(!*net&&*status==200&&b.data){
         json_t *root=json_parse((const char*)b.data);
         const char *id=json_str(root,"data.user.id","");
@@ -1089,7 +1103,7 @@ static int media_public_gql(const char *login,int kind,twitch_media_t *out,int m
                 snprintf(v->type,sizeof(v->type),"%s",kind==4?"clip":!strcmp(type,"HIGHLIGHT")?"highlight":!strcmp(type,"UPLOAD")?"upload":"archive");
                 double secs=json_num(j,kind==4?"durationSeconds":"lengthSeconds",0);v->seconds=secs>=0&&secs<=604800?(int)secs:0;
                 v->offset=-1;
-                if(kind==4)snprintf(v->url,sizeof(v->url),"https://clips.twitch.tv/%s",mid);
+                if(kind==4){snprintf(v->url,sizeof(v->url),"https://clips.twitch.tv/%s",mid);category_image_url(json_str(j,"thumbnailURL",""),v->thumb,sizeof(v->thumb),160,90);}
                 else{snprintf(v->url,sizeof(v->url),"https://www.twitch.tv/videos/%s",mid);category_image_url(json_str(j,"previewThumbnailURL",""),v->thumb,sizeof(v->thumb),160,90);}
             }
         }
@@ -1098,6 +1112,29 @@ static int media_public_gql(const char *login,int kind,twitch_media_t *out,int m
     buf_free(&b);curl_slist_free_all(h);http_free(c);
     LOGI("media: public catalog kind=%d http=%ld curl=%d count=%d",kind,*status,*net,n);
     return n;
+}
+/* Best-effort public metadata; never infer a subscription from HTTP 403.
+ * Query only catalog IDs, never playback tokens. Failure leaves the catalog usable. */
+static void media_restrictions(twitch_media_t *out,int n,volatile int *abort_flag){
+    char body[4096]="{\"query\":\"query { ";size_t used=strlen(body);
+    for(int i=0;i<n;i++){
+        if(!numeric_id(out[i].id))continue;
+        int k=snprintf(body+used,sizeof(body)-used,"v%d: video(id: \\\"%s\\\") { resourceRestriction { type } } ",i,out[i].id);
+        if(k<0||(size_t)k>=sizeof(body)-used-8)return;
+        used+=(size_t)k;
+    }
+    snprintf(body+used,sizeof(body)-used,"}\"}");
+    if(abort_flag&&*abort_flag)return;
+    buf_t b={0};long status=0;
+    if(!http_native_read("https://gql.twitch.tv/gql",body,NULL,1,&b,&status,abort_flag)&&status==200&&b.data){
+        json_t *root=json_parse((const char*)b.data);
+        for(int i=0;i<n;i++){
+            char path[80];snprintf(path,sizeof(path),"data.v%d.resourceRestriction.type",i);
+            out[i].subscriber_only=twitch_video_subscriber_type(json_str(root,path,""));
+        }
+        json_free(root);
+    }
+    buf_free(&b);
 }
 int twitch_fetch_media(const char *login,const char *oauth,int kind,twitch_media_t *out,int max,char *err,size_t errlen,volatile int *abort_flag){
     char id[32],url[256];buf_t b={0};long status=0;int n=-1,net=0;
@@ -1128,12 +1165,12 @@ int twitch_fetch_media(const char *login,const char *oauth,int kind,twitch_media
         }json_free(root);
     }
     buf_free(&b);LOGI("media: Helix catalog kind=%d HTTP %ld curl=%d count=%d",kind,status,net,n);
-    if(n>=0)return n;
+    if(n>=0){if(kind!=4&&n>0)media_restrictions(out,n,abort_flag);return n;}
 public_catalog:
     if(abort_flag&&*abort_flag)return -1;
     long public_status=0;int public_net=0;
     n=media_public_gql(login,kind,out,max,&public_status,&public_net,abort_flag);
-    if(n>=0)return n;
+    if(n>=0){if(kind!=4&&n>0)media_restrictions(out,n,abort_flag);return n;}
     if(status==401)snprintf(err,errlen,"Twitch recusou a sessao na API (401); catalogo publico indisponivel. / API session rejected; public catalog unavailable.");
     else if(net<0||public_net<0)snprintf(err,errlen,"Falha de rede/TLS / Network/TLS error (curl %d/%d)",-net,-public_net);
     else snprintf(err,errlen,"Catalogo indisponivel / Catalog unavailable (HTTP %ld/%ld)",status,public_status);
