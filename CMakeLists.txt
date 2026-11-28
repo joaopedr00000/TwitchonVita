@@ -13,7 +13,7 @@ include("${VITASDK}/share/vita.cmake" REQUIRED)
 
 set(VITA_APP_NAME "Twitch")
 set(VITA_TITLEID  "VTWI00001")
-set(VITA_VERSION  "01.33")
+set(VITA_VERSION  "01.34")
 
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -O2 -std=gnu11")
 

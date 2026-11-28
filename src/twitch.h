@@ -37,6 +37,9 @@ int twitch_json_escape(const char *s, char *out, size_t cap);
 int twitch_build_gql_body(const char *login, char *out, size_t cap);
 int twitch_build_list_body(twitch_list_t kind, const char *query, char *out, size_t cap);
 
+int twitch_channel_url(const char *login, char *out, size_t cap);
+int twitch_parse_channel_bio(const char *json, char *bio, size_t cap);
+
 /* Extracts value/signature from the PlaybackAccessToken response. 0 on success. */
 int twitch_parse_token(const char *json, char *token, size_t token_cap,
                        char *sig, size_t sig_cap);
@@ -61,6 +64,7 @@ void twitch_sort_by_viewers(twitch_stream_t *s, int n);
 int twitch_gql(const char *body, const char *oauth, buf_t *resp,
                char *err, size_t errlen, volatile int *abort_flag);
 
+int twitch_fetch_channel_bio(const char *login, char *bio, size_t cap, volatile int *abort_flag);
 int twitch_fetch_list(twitch_list_t kind, const char *query, const char *oauth,
                       twitch_stream_t *out, int max, char *err, size_t errlen,
                       volatile int *abort_flag);

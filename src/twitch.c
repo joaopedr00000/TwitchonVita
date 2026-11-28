@@ -50,6 +50,30 @@ int twitch_json_escape(const char *s, char *out, size_t cap)
     return (int)n;
 }
 
+int twitch_channel_url(const char *login, char *out, size_t cap)
+{
+    if (!login || !*login || !out || !cap || strlen(login) > 25) return -1;
+    for (const unsigned char *p=(const unsigned char *)login;*p;p++)
+        if (!((*p>='a'&&*p<='z')||(*p>='A'&&*p<='Z')||(*p>='0'&&*p<='9')||*p=='_')) return -1;
+    int n=snprintf(out,cap,"https://www.twitch.tv/%s",login);
+    return n>=0 && (size_t)n<cap?0:-1;
+}
+
+int twitch_parse_channel_bio(const char *json, char *bio, size_t cap)
+{
+    if (!bio || !cap) return -1;
+    bio[0]=0;
+    if (!json) return -1;
+    json_t *root=json_parse(json);
+    json_t *u=json_path(root,"data.user");
+    if (!u || u->type!=JSON_OBJECT) {json_free(root);return -1;}
+    const char *s=json_str(u,"description","");
+    size_t n=strlen(s);
+    if(n>=cap){n=cap-1;while(n&&((unsigned char)s[n]&0xc0)==0x80)--n;}
+    memcpy(bio,s,n);bio[n]=0;
+    json_free(root);return 0;
+}
+
 static int build_gql_profile(const char *login,const char *profile,char *out,size_t cap)
 {
     /* Inline query (no persisted-query hash) so it keeps working when hashes rotate. */
@@ -330,6 +354,21 @@ int twitch_gql(const char *body, const char *oauth, buf_t *resp,
     curl_slist_free_all(hdr);
     http_free(c);
     return ret;
+}
+
+int twitch_fetch_channel_bio(const char *login,char *bio,size_t cap,volatile int *abort_flag)
+{
+    char url[96],body[384],err[128];
+    if(!bio||!cap)return -1;
+    bio[0]=0;
+    if(twitch_channel_url(login,url,sizeof(url))<0)return -1;
+    int n=snprintf(body,sizeof(body),
+        "{\"query\":\"query { user(login: \\\"%s\\\") { description } }\"}",login);
+    if(n<0||(size_t)n>=sizeof(body))return -1;
+    buf_t resp={0};
+    int rc=twitch_gql(body,NULL,&resp,err,sizeof(err),abort_flag);
+    if(rc==0)rc=twitch_parse_channel_bio((const char *)resp.data,bio,cap);
+    buf_free(&resp);return rc;
 }
 
 int twitch_fetch_list(twitch_list_t kind, const char *query, const char *oauth,

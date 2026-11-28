@@ -1,7 +1,7 @@
 name: VitaTwitch — 19 languages, touch and chat SEND experimental checks
 on:
   push:
-    branches: ['features/i18n19-touch-select-chat-send', 'visual/twitch-classic']
+    branches: ['features/i18n19-touch-select-chat-send', 'visual/twitch-classic', 'features/channel-profile']
   workflow_dispatch:
 permissions:
   contents: read
@@ -27,6 +27,8 @@ jobs:
           /tmp/vt-m3u8-ad-test
           gcc -DVT_NO_NET -std=gnu11 -Wall -Wextra -Isrc tests/twitch_region_test.c src/twitch.c src/json.c src/log.c src/i18n.c -o /tmp/vt-region-test
           /tmp/vt-region-test
+          gcc -DVT_NO_NET -std=gnu11 -Wall -Wextra -Isrc tests/channel_profile_test.c src/twitch.c src/json.c src/log.c src/i18n.c -o /tmp/vt-profile-test
+          /tmp/vt-profile-test
           gcc -std=gnu11 -Wall -Wextra -Werror -pthread -Isrc tests/pktqueue_test.c src/pktqueue.c -o /tmp/vt-queue-test
           /tmp/vt-queue-test
       - name: IRC message sanitization and UTF-8 security checks
@@ -108,17 +110,17 @@ jobs:
             assert cert.count(b'-----BEGIN CERTIFICATE-----')>=100
             sfo=z.read('sce_sys/param.sfo')
             assert b'VTWI00001' in sfo
-            assert b'01.33' in sfo
+            assert b'01.34' in sfo
             assert b'Twitch\x00' in sfo
-          print('PASS experimental VitaSDK VPK, version 01.33, title ID and trusted IRC CA bundle')
+          print('PASS experimental VitaSDK VPK, version 01.34, title ID and trusted IRC CA bundle')
           PY
-          cp build-ci/VitaTwitch.vpk Twitch-1.33-Classic.vpk
-          sha256sum Twitch-1.33-Classic.vpk > SHA256SUMS.txt
+          cp build-ci/VitaTwitch.vpk Twitch-1.34-Profile.vpk
+          sha256sum Twitch-1.34-Profile.vpk > SHA256SUMS.txt
       - uses: actions/upload-artifact@v4
         with:
-          name: Twitch-1.33-Classic-EXPERIMENTAL
+          name: Twitch-1.34-Profile-EXPERIMENTAL
           path: |
-            Twitch-1.33-Classic.vpk
+            Twitch-1.34-Profile.vpk
             SHA256SUMS.txt
             ca-bundle.sha256
           retention-days: 14

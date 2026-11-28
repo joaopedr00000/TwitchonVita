@@ -8,6 +8,7 @@
 #include <string.h>
 
 #include <psp2/apputil.h>
+#include <psp2/appmgr.h>
 #include <psp2/common_dialog.h>
 #include <psp2/ctrl.h>
 #include <psp2/touch.h>
@@ -45,7 +46,7 @@ int _newlib_heap_size_user = 96 * 1024 * 1024;
 #define SETTINGS_FILE DATA_DIR "/settings.txt"
 #define LOG_FILE      DATA_DIR "/log.txt"
 #define LOG_PREV_FILE DATA_DIR "/log_prev.txt"
-#define APP_VERSION   "1.33-classic-keyboard2"
+#define APP_VERSION   "1.34-profile-test1"
 
 #define MAX_ITEMS 100
 
@@ -524,6 +525,18 @@ static void draw_header(void)
 }
 
 /* Fixed footer cells keep long localized labels inside the 960px display. */
+static const char *profile_label(int action)
+{
+    static const char *const labels[19][2]={
+        {"Profile","Follow / unfollow"},{"Perfil","Seguir / dejar de seguir"},{"Perfil","Seguir / deixar de seguir"},
+        {"Profil","Suivre / ne plus suivre"},{"Profilo","Segui / non seguire"},{"Profil","Folgen / entfolgen"},
+        {"Профиль","Подписаться / отписаться"},{"Profil","Ikuti / berhenti mengikuti"},{"Profile","Sundan / i-unfollow"},
+        {"Profile","Sunda / undang sa pagsunod"},{"Profiel","Volgen / ontvolgen"},{"Profil","Obserwuj / przestań"},
+        {"Profil","Takip et / bırak"},{"Профіль","Стежити / не стежити"},{"Profil","Följ / avfölj"},
+        {"プロフィール","フォロー / 解除"},{"프로필","팔로우 / 취소"},{"个人资料","关注 / 取消关注"},{"個人資料","追蹤 / 取消追蹤"}
+    };
+    int lang=vt_lang_current();return labels[lang>=0&&lang<19?lang:0][action];
+}
 static void footer_hint(int x,int width,int y,const char *btn,const char *label)
 {
     ui_hint_bounded(x,y,width,btn,label);
@@ -535,10 +548,10 @@ static void draw_footer(void)
     vita2d_draw_rectangle(0,FOOTER_Y,SCREEN_W,1,C_PANEL2);
     const char *ok=g_side_focus>=0?side_label(g_side_focus):
         g_tab==TAB_SEARCH&&tb->sel<0?vt_tr(VT_I_SEARCH):vt_tr(VT_I_PLAY);
-    const char *btns[]={g_ok_name,"△","□","L/R","SELECT"};
-    const char *labels[]={ok,vt_tr(VT_I_REFRESH),vt_msg("Ir al canal exacto"),vt_tr(VT_I_TAB),vt_tr(VT_I_MENU)};
-    int count=g_tab==TAB_SEARCH?5:4,cell=(SCREEN_W-24)/count,pos=0;
-    for(int i=0;i<5;i++){if(i==2&&g_tab!=TAB_SEARCH)continue;footer_hint(12+pos++*cell,cell,FOOTER_Y+25,btns[i],labels[i]);}
+    const char *btns[]={g_ok_name,"△","□","L/R","SELECT","START"};
+    const char *labels[]={ok,vt_tr(VT_I_REFRESH),vt_msg("Ir al canal exacto"),vt_tr(VT_I_TAB),vt_tr(VT_I_MENU),profile_label(0)};
+    int count=g_tab==TAB_SEARCH?6:5,cell=(SCREEN_W-24)/count,pos=0;
+    for(int i=0;i<6;i++){if(i==2&&g_tab!=TAB_SEARCH)continue;footer_hint(12+pos++*cell,cell,FOOTER_Y+25,btns[i],labels[i]);}
 }
 
 static void draw_center_msg(const char *title, const char *msg, int top)
@@ -1447,6 +1460,79 @@ static void init_system(void)
 
 /* ------------------------------------------------------------- main */
 
+typedef struct {char login[32],bio[512];} profile_job_t;
+static int profile_run(void *arg,volatile int *abort_flag)
+{
+    profile_job_t *j=arg;return twitch_fetch_channel_bio(j->login,j->bio,sizeof(j->bio),abort_flag);
+}
+static const char *profile_web_note(void)
+{
+    int l=vt_lang_current();
+    return l==2?"Seguir: abre a Twitch oficial no navegador. Se falhar, use o celular/PC.":l==1?"Seguir: abre Twitch oficial. Si falla, usa el móvil/PC.":"Follow: opens official Twitch. If unavailable, use a phone/PC.";
+}
+static void profile_screen(const twitch_stream_t *s)
+{
+    char url[96],line[160];
+    if(twitch_channel_url(s->login,url,sizeof(url))<0)return;
+    profile_job_t job={0};snprintf(job.login,sizeof(job.login),"%s",s->login);
+    task_t task={0};
+    int loading=task_start(&task,profile_run,&job)==0,selected=s->live?0:1,armed=0;
+    const int x=92,y=32,w=776,h=480,bx=x+24,by=y+310,bw=w-48,rh=44;
+    for(;;){
+        ui_input_poll(&g_in);
+        if(loading&&task_done(&task)){task_wait(&task);loading=0;}
+        if(!(g_in.held&(g_btn_ok|g_btn_back|SCE_CTRL_START))&&!g_in.touch_down)armed=1;
+        if(armed&&(g_in.pressed&(g_btn_back|SCE_CTRL_START)))break;
+        int choose=armed&&(g_in.pressed&g_btn_ok);
+        if(g_in.pressed&SCE_CTRL_UP)selected=(selected+2)%3;
+        if(g_in.pressed&SCE_CTRL_DOWN)selected=(selected+1)%3;
+        for(int i=0;i<3;i++)if(armed&&ui_touch_hit(&g_in,bx,by+i*rh,bw,rh-3)){selected=i;choose=1;break;}
+        if(choose){
+            if(selected==0&&s->live){
+                if(loading){task_cancel(&task);task_wait(&task);}
+                play_channel(s->login,s->display,s->title,s->viewers);return;
+            }
+            if(selected==2)break;
+            if(selected==1){
+                /* Open only a validated official URL. Never pass account tokens to the browser. */
+                int rc=sceAppMgrLaunchAppByUri(0xFFFFF,url);
+                if(rc<0)modal_message(profile_label(1),url);
+                armed=0;
+            }
+        }
+        sceKernelPowerTick(SCE_KERNEL_POWER_TICK_DISABLE_AUTO_SUSPEND);
+        frame_begin();draw_home();
+        int ox,oy;draw_modal_box(w,h,&ox,&oy);
+        ui_text(x+24,y+36,C_WHITE,1.15f,profile_label(0));
+        draw_avatar(s->avatar,s->display,x+24,y+52,76);
+        ui_text_fit(x+116,y+77,w-142,C_WHITE,1.35f,s->display[0]?s->display:s->login);
+        snprintf(line,sizeof(line),"@%s",s->login);
+        ui_text_fit(x+116,y+103,w-142,C_GREY,.9f,line);
+        if(s->live){char viewers[32];ui_fmt_viewers(s->viewers,viewers,sizeof(viewers));snprintf(line,sizeof(line),"%s | %s | %s",vt_tr(VT_I_LIVE),viewers,s->game);}
+        else snprintf(line,sizeof(line),"%s",vt_tr(VT_I_OFFLINE));
+        ui_text_fit(x+116,y+127,w-142,s->live?C_RED:C_GREY,.82f,line);
+        ui_text_fit(x+24,y+157,w-48,C_WHITE,.88f,s->title);
+        if(loading)ui_text_fit(x+24,y+187,w-48,C_GREY,.85f,vt_tr(VT_I_LOADING));
+        else if(job.bio[0])wrap_text(x+24,y+187,w-48,C_GREY,.82f,job.bio,3);
+        ui_text_fit(x+24,y+270,w-48,C_GREY,.75f,profile_web_note());
+        ui_text_fit(x+24,y+294,w-48,C_GREY,.8f,url);
+        const char *labels[]={vt_tr(VT_I_PLAY),profile_label(1),vt_tr(VT_I_BACK)};
+        for(int i=0;i<3;i++){
+            int yy=by+i*rh;ui_round_rect(bx,yy,bw,rh-3,5,selected==i?CLASSIC_PURPLE:CLASSIC_TILE);
+            ui_text_fit(bx+14,yy+26,bw-28,i==0&&!s->live?C_DIM:C_WHITE,.93f,labels[i]);
+        }
+        frame_end();
+    }
+    if(loading){task_cancel(&task);task_wait(&task);}
+    if(g_logged)tab_load(TAB_FOLLOWED);
+}
+static void profile_selected(void)
+{
+    tab_t *tb=&g_tabs[g_tab];
+    if(g_side_focus>=0||tb->state!=LS_READY||tb->sel<0||tb->sel>=tb->count||home_pos(tb)<0)return;
+    twitch_stream_t s=tb->items[tb->sel];profile_screen(&s);
+}
+
 static void open_selected(void)
 {
     tab_t *tb = &g_tabs[g_tab];
@@ -1464,7 +1550,8 @@ static void open_selected(void)
     if (tb->state != LS_READY || tb->sel < 0 || tb->sel >= tb->count || home_pos(tb)<0)
         return;
     twitch_stream_t s = tb->items[tb->sel]; /* copy: the list may refresh meanwhile */
-    play_channel(s.login, s.display, s.title,s.live?s.viewers:-1);
+    if(s.live)play_channel(s.login,s.display,s.title,s.viewers);
+    else profile_screen(&s);
 }
 
 static void home_switch(int t)
@@ -1566,7 +1653,10 @@ int main(void)
         tab_t *tb = &g_tabs[g_tab];
         unsigned p = g_in.pressed;
 
-        /* START no longer exits the application from the home screen. */
+        int profile_cell=(SCREEN_W-24)/(g_tab==TAB_SEARCH?6:5);
+        if((p&SCE_CTRL_START)||ui_touch_hit(&g_in,12+profile_cell*(g_tab==TAB_SEARCH?5:4),FOOTER_Y,profile_cell,SCREEN_H-FOOTER_Y)){
+            profile_selected();continue;
+        }
         if (p & (SCE_CTRL_LTRIGGER | SCE_CTRL_RTRIGGER)) {
             g_game_filter[0]=0;
             home_switch((g_tab+(p&SCE_CTRL_RTRIGGER?1:TAB_COUNT-1))%TAB_COUNT);
