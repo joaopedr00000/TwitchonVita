@@ -975,17 +975,25 @@ static void draw_view(const vslot_t *frame, view_t *vw)
             if(i==2)ui_text_fit(625,y+32,100,C_WHITE,0.92f,vw->pp->quality);
         }
     }
-    if(vw->notice&&sceKernelGetProcessTimeWide()<vw->notice_until){
-        ui_round_rect(160,SCREEN_H-83,640,47,9,C_PANEL);
-        ui_text_fit(180,SCREEN_H-54,600,C_WHITE,0.95f,vw->notice);
-    }
-    if (vw->status) {
+    /* Loading/advertising status belongs in the middle of the video area.
+     * Keep the lower notification area separate, also when chat is visible.
+     * Do not cover an active menu or the system keyboard. */
+    if (vw->status && !vw->menu && !vw->quality_menu && !vw->profile_open && !vw->ime_active) {
         int tw=ui_text_w(0.94f,vw->status)+54;
         if(tw>AW-24)tw=AW-24;
-        int bx=(AW-tw)/2,by=SCREEN_H-94;
+        int bx=(AW-tw)/2,by=(SCREEN_H-42)/2;
         ui_round_rect(bx,by,tw,42,9,C_PANEL);
         ui_spinner(bx+20,by+21,7,C_PURPLE);
         ui_text_fit(bx+38,by+28,tw-48,C_WHITE,0.94f,vw->status);
+    }
+    /* Error and action feedback stays at the bottom and is drawn last.
+     * Fit inside the video area rather than obscuring the chat panel. */
+    if(vw->notice&&sceKernelGetProcessTimeWide()<vw->notice_until){
+        int nw=AW-32;
+        if(nw>640)nw=640;
+        int nx=(AW-nw)/2;
+        ui_round_rect(nx,SCREEN_H-83,nw,47,9,C_PANEL);
+        ui_text_fit(nx+20,SCREEN_H-54,nw-40,C_WHITE,0.95f,vw->notice);
     }
 
     vita2d_end_drawing();
