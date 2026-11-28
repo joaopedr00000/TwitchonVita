@@ -44,9 +44,13 @@ jobs:
           grep -q 'src/ime_utf8.c' CMakeLists.txt
           grep -Fq 'PASS SCHMOOPIIE' src/chat.c
           ! grep -Fq 'PASS oauth:' src/chat.c
+          grep -Fq 'sceHttpsEnableOption(CHAT_VERIFY_FLAGS)' src/chat.c
+          grep -Fq 'https://api.twitch.tv/helix/chat/messages' src/chat.c
+          grep -Fq 'user%%3Awrite%%3Achat' src/auth.c
+          grep -Fq 'chat_queue_message(message)' src/player.c
           grep -Fq 'pthread_create(&C.thread' src/chat.c
           grep -Fq 'pthread_join(C.thread' src/chat.c
-          grep -Fq 'chat_start(pp->login)' src/player.c
+          grep -Fq 'chat_start(pp->login,pp->chat_nick,pp->chat_oauth,pp->chat_sender_id)' src/player.c
           grep -Fq 'SCE_CTRL_SELECT' src/player.c
           grep -Fq 'vt_lang_set_code' src/main.c
   vita-sdk-vpk:
@@ -64,6 +68,15 @@ jobs:
           test "$(grep -c -- '-----BEGIN CERTIFICATE-----' assets/cacert.pem)" -ge 100
           sha256sum assets/cacert.pem | tee ca-bundle.sha256
           echo 'The CA file is obtained over verified GitHub Actions runner HTTPS.' >> "$GITHUB_STEP_SUMMARY"
+      - name: Validate embedded CA generation and OpenSSL trust loading on host
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libcurl4-openssl-dev libssl-dev
+          mkdir -p /tmp/vt-ca
+          cmake -DINPUT="$PWD/assets/cacert.pem" -DOUTPUT=/tmp/vt-ca/vt_ca_bundle.h -P cmake/embed_ca.cmake
+          gcc -Wall -Wextra -Werror -Isrc -I/tmp/vt-ca tests/tls_trust_test.c src/tls_trust.c -o /tmp/vt-ca/test $(pkg-config --cflags --libs libcurl openssl)
+          /tmp/vt-ca/test
       - name: Compile VitaTwitch with VitaSDK (no public release)
         shell: bash
         run: |

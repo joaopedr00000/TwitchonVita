@@ -45,7 +45,7 @@ int _newlib_heap_size_user = 96 * 1024 * 1024;
 #define SETTINGS_FILE DATA_DIR "/settings.txt"
 #define LOG_FILE      DATA_DIR "/log.txt"
 #define LOG_PREV_FILE DATA_DIR "/log_prev.txt"
-#define APP_VERSION   "1.33-classic-video1"
+#define APP_VERSION   "1.33-classic-keyboard2"
 
 #define MAX_ITEMS 100
 
@@ -465,23 +465,23 @@ static void draw_card(const twitch_stream_t *s, home_rect_t r, int selected)
             vita2d_draw_texture_part_scale(tex,x,y,(tw-sw)/2,(th-sh)/2,sw,sh,scale,scale);
         }
     }else{
-        draw_avatar(s->avatar,s->display,x+w/2-27,y+(h-(w>300?64:48))/2-27,54);
+        draw_avatar(s->avatar,s->display,x+w/2-27,y+(h-(w>300?68:54))/2-27,54);
     }
-    int strip=w>300?64:48;
+    int strip=w>300?68:54;
     vita2d_draw_rectangle(x,y+h-strip,w,strip,RGBA8(15,9,24,220));
     ui_clean_text(s->display,line,sizeof(line));
-    ui_text_fit(x+10,y+h-strip+(w>300?26:19),w-20,C_WHITE,w>300?1.08f:0.83f,line);
+    ui_text_fit(x+10,y+h-strip+(w>300?28:23),w-20,C_WHITE,w>300?1.16f:0.98f,line);
     if(s->live){
         ui_fmt_viewers(s->viewers,v,sizeof(v));
         snprintf(second,sizeof(second),"%s%s%s",v,s->game[0]?"  /  ":"",s->game);
     }else snprintf(second,sizeof(second),"%s",vt_tr(VT_I_OFFLINE));
     ui_clean_text(second,line,sizeof(line));
-    ui_text_fit(x+10,y+h-9,w-20,RGBA8(203,184,235,255),w>300?0.84f:0.72f,line);
+    ui_text_fit(x+10,y+h-9,w-20,RGBA8(203,184,235,255),w>300?0.96f:0.86f,line);
     if(s->live){
-        int bw=ui_text_w(0.7f,vt_tr(VT_I_LIVE))+28;if(bw>w-16)bw=w-16;
+        int bw=ui_text_w(0.83f,vt_tr(VT_I_LIVE))+28;if(bw>w-16)bw=w-16;
         vita2d_draw_rectangle(x+8,y+5,bw,22,C_SHADE);
         vita2d_draw_rectangle(x+13,y+12,8,8,C_RED);
-        ui_text_fit(x+26,y+21,bw-21,C_WHITE,0.7f,vt_tr(VT_I_LIVE));
+        ui_text_fit(x+26,y+21,bw-21,C_WHITE,0.83f,vt_tr(VT_I_LIVE));
     }
     if(selected)ui_frame(x,y,w,h,2,C_WHITE);
 }
@@ -514,13 +514,13 @@ static void draw_header(void)
             int nw=ui_text_w(0.8f,n);
             ui_text(SIDE_X+SIDE_W-nw-10,y+33,C_WHITE,0.8f,n);label_w-=nw+12;
         }
-        ui_text_fit(SIDE_X+12,y+33,label_w,C_WHITE,0.96f,side_label(i));
+        ui_text_fit(SIDE_X+12,y+33,label_w,C_WHITE,1.1f,side_label(i));
     }
     const char *heading=g_tab==TAB_EXPLORE&&g_game_filter[0]?g_game_filter:side_label(active);
     ui_text_fit(GRID_X,40,(g_logged?780:SCREEN_W-16)-GRID_X,C_WHITE,1.32f,heading);
     if(g_logged){
         char name[80];ui_clean_text(g_auth.display[0]?g_auth.display:g_auth.login,name,sizeof(name));
-        ui_text_fit(796,39,102,C_GREY,0.72f,name);
+        ui_text_fit(796,39,102,C_GREY,0.86f,name);
         draw_avatar(g_auth.avatar,name,906,17,28);
     }
 }
@@ -528,11 +528,7 @@ static void draw_header(void)
 /* Fixed footer cells keep long localized labels inside the 960px display. */
 static void footer_hint(int x,int width,int y,const char *btn,const char *label)
 {
-    int bw=ui_text_w(0.70f,btn)+10;if(bw<22)bw=22;
-    if(bw>width-12)bw=width-12;
-    ui_round_rect(x,y-16,bw,22,4,C_PANEL2);
-    ui_text_fit(x+5,y,bw-10,C_WHITE,0.70f,btn);
-    ui_text_fit(x+bw+5,y,width-bw-10,C_GREY,0.76f,label);
+    ui_hint_bounded(x,y,width,btn,label);
 }
 static void draw_footer(void)
 {
@@ -674,7 +670,7 @@ static void modal_message(const char *title, const char *msg)
         draw_modal_box(560, 210, &x, &y);
         ui_text_fit(x + 28, y + 48, 504, C_WHITE, 1.2f, title);
         wrap_text(x + 28, y + 90, 504, C_GREY, 0.95f, msg, 3);
-        ui_hint(x + 560 - 140, y + 210 - 22, g_ok_name, hint);
+        ui_hint_bounded(x+560-160,y+210-22,136,g_ok_name,hint);
         frame_end();
     }
 }
@@ -704,7 +700,7 @@ static int run_with_spinner(task_t *t, task_fn fn, void *arg, const char *msg)
         draw_modal_box(460, 150, &x, &y);
         ui_spinner(x + 50, y + 62, 14, C_PURPLE);
         ui_text_fit(x + 84, y + 70, 460 - 110, C_WHITE, 1.0f, msg);
-        ui_hint(x + 460 - 130, y + 150 - 20, g_back_name, vt_msg("Cancelar"));
+        ui_hint_bounded(x+460-180,y+150-20,156,g_back_name,vt_msg("Cancelar"));
         frame_end();
     }
 }
@@ -856,6 +852,7 @@ static void play_selected(void)
     pp.login = play_job.login;
     pp.chat_nick = g_logged ? g_auth.login : NULL;
     pp.chat_oauth = g_logged ? g_auth.access : NULL;
+    pp.chat_sender_id = g_logged ? g_auth.user_id : NULL;
     pp.chat_on = &g_chat_on;
     pp.viewer_count = &play_viewers;
     pp.variants=play_list;pp.variant_count=play_count;pp.variant_current=sel;
@@ -949,8 +946,8 @@ static void quality_draw(void)
     }
     vita2d_draw_rectangle(x+16,y+h-53,w/2-24,43,C_PANEL2);
     vita2d_draw_rectangle(x+w/2+8,y+h-53,w/2-24,43,C_PANEL2);
-    ui_text(x+30,y+h-25,C_WHITE,0.9f,vt_tr(VT_I_PLAY));
-    ui_text(x+w/2+20,y+h-25,C_WHITE,0.9f,vt_tr(VT_I_BACK));
+    ui_hint_bounded(x+28,y+h-25,w/2-48,g_ok_name,vt_tr(VT_I_PLAY));
+    ui_hint_bounded(x+w/2+20,y+h-25,w/2-48,g_back_name,vt_tr(VT_I_BACK));
 }
 
 static void play_tick(void)
@@ -1246,7 +1243,8 @@ static void language_screen(void)
             if(i==sel) ui_round_rect(x+12,y+60+k*row,w-24,row-3,6,C_PURPLE);
             ui_text_fit(x+30,y+90+k*row,w-60,C_WHITE,0.94f,vt_lang_name(i));
         }
-        ui_text_fit(x+24,y+h-13,w-48,C_GREY,0.7f,vt_msg("Up/Down  |  X  |  Back"));
+        ui_hint_bounded(x+24,y+h-14,(w-48)/2,g_ok_name,vt_tr(VT_I_PLAY));
+        ui_hint_bounded(x+w/2,y+h-14,w/2-24,g_back_name,vt_tr(VT_I_BACK));
         frame_end();
     }
 }
@@ -1293,8 +1291,8 @@ static void region_screen(void)
             ui_text_fit(x+28,ry+28,w-140,C_WHITE,0.95f,region_label(i));
             if(i==g_region)ui_text_fit(x+w-105,ry+28,75,C_WHITE,0.8f,vt_tr(VT_I_ON));
         }
-        ui_hint(x+24,y+h-22,g_ok_name,vt_tr(VT_I_PLAY));
-        ui_hint(x+w/2,y+h-22,g_back_name,vt_tr(VT_I_BACK));
+        ui_hint_bounded(x+24,y+h-22,w/2-32,g_ok_name,vt_tr(VT_I_PLAY));
+        ui_hint_bounded(x+w/2,y+h-22,w/2-24,g_back_name,vt_tr(VT_I_BACK));
         vita2d_end_drawing();vita2d_swap_buffers();dirty=0;
         sceKernelDelayThread(8000);
     }
@@ -1342,7 +1340,7 @@ static void extras_menu(void)
             const char *label=i==0?vt_tr(VT_I_ACCOUNT):i==1?vt_tr(VT_I_LANGUAGE):
                 i==2?vt_tr(VT_I_TOUCH):i==3?vt_tr(VT_I_CHAT):
                 i==4?vt_tr(VT_I_CLEAR_CACHE):i==5?vt_tr(VT_I_ABOUT):i==6?vt_opt(VT_O_PROFILE):i==7?vt_opt(VT_O_AUTO):i==8?vt_opt(VT_O_DIAG):i==9?vt_opt(VT_O_REMEMBER):i==10?region_title():vt_tr(VT_I_CLOSE);
-            ui_text_fit(x+32,yy+23,w-280,C_WHITE,0.95f,label);
+            ui_text_fit(x+32,yy+23,w-280,C_WHITE,1.05f,label);
             const char *value=NULL;
             int toggle=i==2||i==3||i==7||i==8||i==9,enabled=0;
             if(i==1)value=vt_lang_name(vt_lang_current());
@@ -1354,8 +1352,8 @@ static void extras_menu(void)
                 vita2d_draw_rectangle(x+w-38,yy+10,10,12,enabled?C_GREEN:C_DIM);
             }
             if(value){
-                int avail=toggle?185:210,tw=ui_text_w(0.83f,value);if(tw>avail)tw=avail;
-                ui_text_fit(x+w-(toggle?48:30)-tw,yy+23,tw,sel==i?C_WHITE:C_GREY,0.83f,value);
+                int avail=toggle?185:210,tw=ui_text_w(0.94f,value);if(tw>avail)tw=avail;
+                ui_text_fit(x+w-(toggle?48:30)-tw,yy+23,tw,sel==i?C_WHITE:C_GREY,0.94f,value);
             }
         }
         frame_end();

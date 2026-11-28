@@ -1,10 +1,10 @@
 # VitaTwitch
 
-## Proposed interface and playback improvements
+## Proposed native HTTPS chat sending
 
-This change builds on PR #1. It adds a classic Twitch-style navigation layout, controller and touch improvements, UTF-8 text fitting, viewer snapshots on explicit request, five-second player information overlay, in-player quality switching with startup rollback, explicit bilinear GPU scaling and decoded-resolution diagnostics. The original hardware decoder path, VitaTwitch name, title ID and LiveArea assets are retained. The viewer request requires a verified HTTPS connection; if unavailable the card snapshot is retained. Quality changes reopen the stream rather than switching seamlessly.
+This change builds on PR #1 and the classic-interface proposal. It keeps anonymous IRC reading and adds authenticated Helix writes via Sony sceHttp/sceHttps with certificate and hostname verification. Install [vita_tls_fixer](https://github.com/devnoname120/vita_tls_fixer/releases/latest) 0.2.3+ with Full or System + updated certificates to use the supported modern TLS configuration; do not combine it with iTLS-Enso or vitals. Reboot and reauthorize user:write:chat if necessary. TLS 1.2/1.3 is negotiated rather than forced. The native keyboard opens with R, touch or the player menu, independently of IRC JOIN. The client validates account and scope, checks is_sent/drop_reason, and does not infer expiry solely from expires_in=0. No token is sent through the legacy IRC reader. Legacy HTTP and anonymous IRC still have certificate-verification limitations. This does not claim full app TLS security.
 
-The follow-up chat-sending implementation is proposed separately. Until then, chat is read-only.
+Also includes native PlayStation button glyphs and enlarged text. The final fork build was confirmed working on a physical Vita by its tester; independent upstream integration testing is still recommended. Original VitaTwitch branding and LiveArea assets remain unchanged. Never share auth.txt.
 
 Cliente de directos de Twitch para PS Vita (VitaSDK). Reproduce con los decodificadores
 por hardware (H.264 + AAC), permite iniciar sesión con tu cuenta sin escribir la contraseña

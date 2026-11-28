@@ -41,6 +41,7 @@ void ui_spinner(float cx, float cy, float r, unsigned color);
 void ui_image(vita2d_texture *t, float x, float y, float w, float h);
 /* Small rounded "button" glyph with a label, returns the width used. */
 int ui_hint(int x, int y, const char *btn, const char *label);
+void ui_hint_bounded(int x,int y,int width,const char *btn,const char *label);
 
 /* "1.234" / "12,3 mil" style viewer counts. */
 void ui_fmt_viewers(int v, char *out, size_t cap);

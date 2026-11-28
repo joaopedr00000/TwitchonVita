@@ -90,14 +90,48 @@ void ui_image(vita2d_texture *t, float x, float y, float w, float h)
         vita2d_draw_texture_scale(t, x, y, w / tw, h / th);
 }
 
+/* Native PlayStation glyphs: no dependency on optional PGF characters. */
+static int ps_kind(const char *btn)
+{
+    if(!strcmp(btn,"X")||!strcmp(btn,"×"))return 1;
+    if(!strcmp(btn,"O")||!strcmp(btn,"○"))return 2;
+    if(!strcmp(btn,"□"))return 3;
+    if(!strcmp(btn,"△"))return 4;
+    return 0;
+}
+static void ps_line(float x,float y,float x2,float y2,unsigned c)
+{
+    vita2d_draw_line(x,y,x2,y2,c);
+    vita2d_draw_line(x+1,y,x2+1,y2,c);
+    vita2d_draw_line(x,y+1,x2,y2+1,c);
+}
+static int hint_button(int x,int y,const char *btn,int draw)
+{
+    int k=ps_kind(btn),bw=k?24:ui_text_w(0.72f,btn)+12;
+    if(bw<24)bw=24;
+    if(!draw)return bw;
+    if(!k){ui_round_rect(x,y-17,bw,24,6,C_PANEL2);ui_text_center(x+bw/2,y,C_WHITE,0.72f,btn);return bw;}
+    unsigned colors[]={0,RGBA8(104,174,255,255),RGBA8(255,112,129,255),RGBA8(245,140,222,255),RGBA8(90,221,168,255)};
+    unsigned c=colors[k];float cx=x+12,cy=y-5;
+    vita2d_draw_fill_circle(cx,cy,12,c);
+    vita2d_draw_fill_circle(cx,cy,10, C_PANEL2);
+    if(k==1){ps_line(cx-5,cy-5,cx+4,cy+4,c);ps_line(cx+4,cy-5,cx-5,cy+4,c);}
+    else if(k==2){vita2d_draw_fill_circle(cx,cy,6,c);vita2d_draw_fill_circle(cx,cy,4,C_PANEL2);}
+    else if(k==3){vita2d_draw_rectangle(cx-6,cy-6,12,12,c);vita2d_draw_rectangle(cx-4,cy-4,8,8,C_PANEL2);}
+    else {ps_line(cx,cy-6,cx-6,cy+5,c);ps_line(cx,cy-6,cx+6,cy+5,c);ps_line(cx-6,cy+5,cx+6,cy+5,c);}
+    return bw;
+}
+void ui_hint_bounded(int x,int y,int width,const char *btn,const char *label)
+{
+    int bw=hint_button(x,y,btn,0);if(width<bw+6)return;
+    hint_button(x,y,btn,1);
+    ui_text_fit(x+bw+7,y,width-bw-9,C_WHITE,0.88f,label);
+}
 int ui_hint(int x, int y, const char *btn, const char *label)
 {
-    int bw = ui_text_w(0.8f, btn) + 12;
-    if (bw < 24) bw = 24;
-    ui_round_rect(x, y - 16, bw, 22, 6, C_PANEL2);
-    ui_text_center(x + bw / 2, y, C_WHITE, 0.8f, btn);
-    ui_text(x + bw + 6, y, C_GREY, 0.85f, label);
-    return bw + 6 + ui_text_w(0.85f, label) + 20;
+    int bw=hint_button(x,y,btn,0),w=bw+7+ui_text_w(0.88f,label)+10;
+    ui_hint_bounded(x,y,w,btn,label);
+    return w+10;
 }
 
 void ui_fmt_viewers(int v, char *out, size_t cap)

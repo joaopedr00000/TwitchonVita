@@ -20,6 +20,7 @@ set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -O2 -std=gnu11")
 add_executable(${PROJECT_NAME}
   src/main.c
   src/http.c
+  src/tls_trust.c
   src/twitch.c
   src/m3u8.c
   src/hls.c
@@ -40,6 +41,16 @@ add_executable(${PROJECT_NAME}
   src/ime_utf8.c
   src/mp4_demux.c
 )
+
+# Generate the immutable Mozilla trust bundle at configure time. A developer
+# build without the bundle can still read anonymously, but cannot send OAuth.
+set(VT_CA_HEADER "${CMAKE_CURRENT_BINARY_DIR}/generated/vt_ca_bundle.h")
+file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/generated")
+set(INPUT "${CMAKE_CURRENT_SOURCE_DIR}/assets/cacert.pem")
+set(OUTPUT "${VT_CA_HEADER}")
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed_ca.cmake")
+target_include_directories(${PROJECT_NAME} PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${INPUT}")
 
 target_link_libraries(${PROJECT_NAME}
   vita2d
@@ -62,6 +73,8 @@ target_link_libraries(${PROJECT_NAME}
   SceRtc_stub
   SceNet_stub
   SceNetCtl_stub
+  SceHttp_stub
+  SceSsl_stub
   SceSysmem_stub
   SceKernelThreadMgr_stub
   SceKernelModulemgr_stub

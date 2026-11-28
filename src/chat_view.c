@@ -4,13 +4,14 @@
 #include "chat.h"
 #include "images.h"
 #include "log.h"
+#include "ui.h"
 
 #include <stdio.h>
 #include <string.h>
 #include <psp2/kernel/processmgr.h>
 
-#define FONT_SCALE 0.92f
-#define LINE_H     27
+#define FONT_SCALE 1.04f
+#define LINE_H     31
 #define EMOTE_H    25
 #define BADGE_H    20  /* Twitch badges are 18x18 at 1x */
 #define PAD        10
@@ -135,12 +136,12 @@ static void render_panel(int x, int y, int w, int h, vita2d_pgf *f, const char *
     vita2d_draw_rectangle(x, y, w, h, COL_BG);
     vita2d_draw_rectangle(x, y, w, HEADER, COL_HEADER);
     snprintf(title, sizeof(title), vt_msg("Chat de %s"), channel ? channel : "");
-    vita2d_pgf_draw_text(f, x + PAD, y + 22, COL_TEXT, 0.85f, title);
+    ui_text_fit(x+PAD,y+24,inner,COL_TEXT,1.0f,title);
     chat_status(status, sizeof(status));
-    vita2d_pgf_draw_text(f, x + PAD, y + HEADER + 18, COL_GREY, 0.7f, status);
+    ui_text_fit(x+PAD,y+HEADER+21,inner,COL_GREY,0.85f,status);
 
-    int top = y + HEADER + 26;
-    int bottom = y + h - 6;
+    int top = y + HEADER + 30;
+    int bottom = y + h - 44;
     chat_lock();
     int n = chat_count();
     for (int k = 0; k < n; k++) {
