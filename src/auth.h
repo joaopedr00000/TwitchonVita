@@ -8,7 +8,7 @@
  * Vita polls until the token is issued. No password is ever typed on the
  * console. */
 
-#define AUTH_SCOPES "user:read:follows chat:read chat:edit"
+#define AUTH_SCOPES "user:read:follows chat:read chat:edit user:write:chat"
 
 typedef struct {
     char access[64];

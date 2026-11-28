@@ -45,7 +45,7 @@ int _newlib_heap_size_user = 96 * 1024 * 1024;
 #define SETTINGS_FILE DATA_DIR "/settings.txt"
 #define LOG_FILE      DATA_DIR "/log.txt"
 #define LOG_PREV_FILE DATA_DIR "/log_prev.txt"
-#define APP_VERSION   "1.33-classic-chat3"
+#define APP_VERSION   "1.33-classic-tlsfixer1"
 
 #define MAX_ITEMS 100
 
@@ -852,6 +852,7 @@ static void play_selected(void)
     pp.login = play_job.login;
     pp.chat_nick = g_logged ? g_auth.login : NULL;
     pp.chat_oauth = g_logged ? g_auth.access : NULL;
+    pp.chat_sender_id = g_logged ? g_auth.user_id : NULL;
     pp.chat_on = &g_chat_on;
     pp.viewer_count = &play_viewers;
     pp.variants=play_list;pp.variant_count=play_count;pp.variant_current=sel;

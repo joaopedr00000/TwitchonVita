@@ -88,8 +88,8 @@ int chat_load_badges(const char *json);
 int chat_resolve_badges(const char *tag, int16_t *out, int max);
 
 /* ---- live chat (Vita only) ---- */
-/* Authenticated IRC uses verified TLS; anonymous mode is read-only. */
-void chat_start(const char *login,const char *nick,const char *oauth);
+/* Anonymous IRC read; authenticated Helix writes use verified Sony HTTPS. */
+void chat_start(const char *login,const char *nick,const char *oauth,const char *sender_id);
 int chat_can_send(void);
 int chat_retry_auth(void);
 /* 0 queued, -1 unavailable, -2 rate limited, -3 invalid text. */

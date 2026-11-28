@@ -1,5 +1,19 @@
 # VitaTwitch
 
+## Classic — TLS Fixer requirement for chat sending (experimental)
+
+**Install [vita_tls_fixer by devnoname120](https://github.com/devnoname120/vita_tls_fixer/releases/latest) 0.2.3 or newer with the Full option (or System plugin + updated certificates), then reboot.** Browser-only installation is insufficient. Do not combine TLS Fixer with iTLS-Enso or vitals; the TLS Fixer installer documents their incompatibility. The plugin is a required dependency for the supported modern TLS chat-sending configuration, not bundled with this VPK.
+
+Sign out and sign in again to grant the new `user:write:chat` OAuth scope. Press R, touch Write, or select Send message in the player. Messages are posted to Twitch's official Helix Send Chat Message endpoint via Sony `sceHttp`/`sceHttps` with certificate and hostname verification enabled, allowing the system TLS Fixer provider to negotiate TLS 1.2/1.3. The app does not force TLS 1.3 or claim to detect the plugin; negotiation depends on provider and server. Channel ID is resolved via verified Helix before sending. No credentials are sent through the legacy IRC reader. An HTTP 401 means check login, token scope and client ID; HTTP 403 means Twitch rejected permission; NET errors indicate system networking/TLS failure. No automatic POST retry. Existing account registration/client-ID scope support and on-device sending still need physical validation. Anonymous reading and playback keep their previous transport; legacy anonymous IRC does not verify certificates, and other legacy HTTPS paths have independent security limitations. Older notes below describe previous builds.
+
+### Português (Brasil)
+
+Para **enviar mensagens no chat**, instale o [TLS Fixer](https://github.com/devnoname120/vita_tls_fixer/releases/latest) na opção Full ou System + certificados atualizados e reinicie o PS Vita. Saia da conta Twitch e entre novamente para autorizar `user:write:chat`. Não use iTLS-Enso ou vitals junto com TLS Fixer. A leitura do chat e o vídeo continuam no transporte anterior. O envio usa HTTPS nativo com verificação de certificados; TLS 1.3 depende da negociação. Função experimental, ainda requer teste no console.
+
+### Español
+
+Para **enviar mensajes**, instala [TLS Fixer](https://github.com/devnoname120/vita_tls_fixer/releases/latest) con Full o System + certificados, reinicia la consola y vuelve a iniciar sesión para autorizar `user:write:chat`. No combines TLS Fixer con iTLS-Enso ni vitals. Envío experimental por HTTPS nativo con verificación de certificados; pendiente de pruebas físicas.
+
 ### PlayFix 5 — legacy chat restoration
 
 This experimental build keeps the PlayFix 4 video/audio/HLS pipeline and restores the original 1.32 anonymous IRC reader, including badges and 7TV. The chat send composer is disabled; no account token is passed to IRC. The legacy chat TLS compatibility mode does not verify the server certificate, so chat authenticity is not guaranteed. The worker uses pthread creation and join for safe lifecycle management. Earlier descriptions of writable chat below refer to previous builds.

@@ -73,6 +73,8 @@ target_link_libraries(${PROJECT_NAME}
   SceRtc_stub
   SceNet_stub
   SceNetCtl_stub
+  SceHttp_stub
+  SceSsl_stub
   SceSysmem_stub
   SceKernelThreadMgr_stub
   SceKernelModulemgr_stub

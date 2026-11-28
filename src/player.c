@@ -1004,7 +1004,7 @@ int player_run(const player_params_t *pp, char *err, int errlen)
 
     LOGI("startup: audio thread setup done; start chat if enabled");
     if (pp->chat_on && *pp->chat_on && pp->login)
-        chat_start(pp->login,pp->chat_nick,pp->chat_oauth);
+        chat_start(pp->login,pp->chat_nick,pp->chat_oauth,pp->chat_sender_id);
     img_set_deferred_free(1);
     LOGI("startup: enter player input/render loop");
 
@@ -1087,7 +1087,7 @@ int player_run(const player_params_t *pp, char *err, int errlen)
                             if(pp->chat_on&&pp->login){
                                 *pp->chat_on=!*pp->chat_on;
                                 if(*pp->chat_on&&!chat_running())
-                                    chat_start(pp->login,pp->chat_nick,pp->chat_oauth);
+                                    chat_start(pp->login,pp->chat_nick,pp->chat_oauth,pp->chat_sender_id);
                             }
                             break;
                         case 1:view.osd=!view.osd;osd_until=view.osd?now_us+5000000ULL:0;refresh_viewers=view.osd;last_draw=0;view.menu=0;break;
@@ -1111,7 +1111,7 @@ int player_run(const player_params_t *pp, char *err, int errlen)
                 if((pressed&SCE_CTRL_SQUARE)&&pp->chat_on&&pp->login){
                     *pp->chat_on=!*pp->chat_on;
                     if(*pp->chat_on&&!chat_running())
-                        chat_start(pp->login,pp->chat_nick,pp->chat_oauth);
+                        chat_start(pp->login,pp->chat_nick,pp->chat_oauth,pp->chat_sender_id);
                     LOGI("chat %s",*pp->chat_on?"visible":"oculto");
                 }
                 if(pressed&(SCE_CTRL_LEFT|SCE_CTRL_RIGHT)){
@@ -1140,7 +1140,7 @@ int player_run(const player_params_t *pp, char *err, int errlen)
             if(!pp->chat_oauth||!pp->chat_nick){view.notice=vt_tr(VT_I_LOGIN_TO_CHAT);view.notice_until=now_us+3000000ULL;}
             else if(!chat_can_send()){
                 if(pp->chat_on)*pp->chat_on=1;
-                if(!chat_running())chat_start(pp->login,pp->chat_nick,pp->chat_oauth);
+                if(!chat_running())chat_start(pp->login,pp->chat_nick,pp->chat_oauth,pp->chat_sender_id);
                 chat_status(view.chat_notice,sizeof(view.chat_notice));
                 chat_retry_auth();
                 view.notice=view.chat_notice[0]?view.chat_notice:vt_msg("Conectando al chat...");view.notice_until=now_us+3000000ULL;

@@ -15,7 +15,8 @@ typedef struct {
     unsigned btn_back;      /* SCE_CTRL_* used to leave the player */
     const char *login;      /* channel login (chat room) */
     const char *chat_nick;  /* logged-in Twitch account (nullable) */
-    const char *chat_oauth; /* OAuth token with chat:read,chat:edit (nullable) */
+    const char *chat_oauth; /* OAuth token with user:write:chat (nullable) */
+    const char *chat_sender_id;
     int profile;
     int auto_quality;
     int has_lower;
