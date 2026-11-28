@@ -657,7 +657,7 @@ static int abort_cb(void *p, curl_off_t a, curl_off_t b, curl_off_t c, curl_off_
  * Never send account credentials through the legacy anonymous IRC connection. */
 #define CHAT_VERIFY_FLAGS (SCE_HTTPS_FLAG_SERVER_VERIFY | SCE_HTTPS_FLAG_CN_CHECK | SCE_HTTPS_FLAG_NOT_AFTER_CHECK | SCE_HTTPS_FLAG_NOT_BEFORE_CHECK | SCE_HTTPS_FLAG_KNOWN_CA_CHECK)
 static int numeric_id(const char *s){return s&&*s&&strlen(s)<24&&strspn(s,"0123456789")==strlen(s);}
-static int native_helix(const char *url,const char *body,char *out,size_t cap,int *status)
+static int native_helix(const char *url,const char *body,char *out,size_t cap,int *status,int validate)
 {
     int tpl=-1,conn=-1,req=-1,rc=-1;char auth[96]={0};size_t used=0;
     *status=0;out[0]=0;
@@ -676,7 +676,7 @@ static int native_helix(const char *url,const char *body,char *out,size_t cap,in
     CHAT_CHECK(conn=sceHttpCreateConnectionWithURL(tpl,url,SCE_HTTP_DISABLE));
     CHAT_CHECK(req=sceHttpCreateRequestWithURL(conn,body?SCE_HTTP_METHOD_POST:SCE_HTTP_METHOD_GET,url,body?strlen(body):0));
     CHAT_CHECK(sceHttpAddRequestHeader(req,"Authorization",auth,SCE_HTTP_HEADER_OVERWRITE));
-    CHAT_CHECK(sceHttpAddRequestHeader(req,"Client-Id",TWITCH_CLIENT_ID,SCE_HTTP_HEADER_OVERWRITE));
+    if(!validate)CHAT_CHECK(sceHttpAddRequestHeader(req,"Client-Id",TWITCH_CLIENT_ID,SCE_HTTP_HEADER_OVERWRITE));
     CHAT_CHECK(sceHttpAddRequestHeader(req,"Accept-Encoding","identity",SCE_HTTP_HEADER_OVERWRITE));
     if(body)CHAT_CHECK(sceHttpAddRequestHeader(req,"Content-Type","application/json",SCE_HTTP_HEADER_OVERWRITE));
     if(C.stop){rc=-1;goto done;}
@@ -702,6 +702,7 @@ static int send_native_message(const char *message,char *reason,size_t cap)
 {
     /* Run on chat worker, not the player/UI. Do not retry a POST automatically. */
     char url[160],escaped[1024],payload[1200],response[4096],broadcaster[24]="";
+    const char *stage="TLS";
     int ssl=0,http=0,rc=-1,status=0,ret=-1;
     if(!numeric_id(C.sender_id)||twitch_json_escape(message,escaped,sizeof(escaped))<0){snprintf(reason,cap,"AUTH");return -1;}
     if(sceSysmoduleIsLoaded(SCE_SYSMODULE_HTTPS)!=0){
@@ -711,9 +712,28 @@ static int send_native_message(const char *message,char *reason,size_t cap)
     rc=sceSslInit(1024*1024);if(rc<0)goto done;ssl=1;
     rc=sceHttpInit(1024*1024);if(rc<0)goto done;http=1;
     rc=sceHttpsEnableOption(CHAT_VERIFY_FLAGS);if(rc<0)goto done;
+    /* Verify the actual issued scopes, not just those requested in device flow. */
+    stage="VALIDATE";
+    rc=native_helix("https://id.twitch.tv/oauth2/validate",NULL,response,sizeof(response),&status,1);
+    if(rc<0||status!=200)goto done;
+    json_t *validation=json_parse(response);
+    const char *client=json_str(validation,"client_id","");
+    const char *uid=json_str(validation,"user_id","");
+    json_t *scopes=json_get(validation,"scopes");
+    int write=0,client_ok=!strcmp(client,TWITCH_CLIENT_ID),user_ok=!strcmp(uid,C.sender_id);
+    for(int i=0;scopes&&i<scopes->count;i++)
+        if(!strcmp(json_str(json_at(scopes,i),NULL,""),"user:write:chat"))write=1;
+    int expiry=(int)json_num(validation,"expires_in",0);
+    LOGI("chat: validate 200 client_match=%d user_match=%d write_scope=%d expires_in=%d",client_ok,user_ok,write,expiry);
+    json_free(validation);
+    if(!client_ok||!user_ok||!write||expiry<=0){
+        snprintf(reason,cap,"%s",!client_ok?"CLIENT ID":!user_ok?"USER ID":!write?"SCOPE user:write:chat":"TOKEN EXPIRED");
+        goto cleanup;
+    }
     /* Resolve the channel using verified Helix, not unverified IRC ROOMSTATE. */
+    stage="USERS";
     snprintf(url,sizeof(url),"https://api.twitch.tv/helix/users?login=%s",C.login);
-    rc=native_helix(url,NULL,response,sizeof(response),&status);
+    rc=native_helix(url,NULL,response,sizeof(response),&status,0);
     if(rc<0||status!=200)goto done;
     json_t *root=json_parse(response);
     json_t *user=json_at(json_get(root,"data"),0);
@@ -724,8 +744,8 @@ static int send_native_message(const char *message,char *reason,size_t cap)
     if(!broadcaster[0]){snprintf(reason,cap,"CHANNEL");goto cleanup;}
     int n=snprintf(payload,sizeof(payload),"{\"broadcaster_id\":\"%s\",\"sender_id\":\"%s\",\"message\":\"%s\"}",broadcaster,C.sender_id,escaped);
     if(n<0||n>=(int)sizeof(payload)){snprintf(reason,cap,"MESSAGE");goto cleanup;}
-    status=0;
-    rc=native_helix("https://api.twitch.tv/helix/chat/messages",payload,response,sizeof(response),&status);
+    status=0;stage="SEND";
+    rc=native_helix("https://api.twitch.tv/helix/chat/messages",payload,response,sizeof(response),&status,0);
     if(rc<0||status!=200)goto done;
     root=json_parse(response);
     json_t *result=json_at(json_get(root,"data"),0);
@@ -739,8 +759,15 @@ static int send_native_message(const char *message,char *reason,size_t cap)
     goto cleanup;
 done:
     if(rc<0)snprintf(reason,cap,"NET %08X",(unsigned)rc);
-    else snprintf(reason,cap,"HTTP %d",status);
-    LOGW("chat: native HTTPS send failed rc=%08X HTTP=%d",(unsigned)rc,status);
+    else {
+        json_t *error=json_parse(response);
+        const char *message=json_str(error,"message","");
+        const char *kind=strstr(message,"scope")?"SCOPE":strstr(message,"client ID")||strstr(message,"client id")||strstr(message,"Client ID")?"CLIENT":strstr(message,"sender_id")?"SENDER":strstr(message,"token")?"TOKEN":"";
+        snprintf(reason,cap,"%s HTTP %d %s",stage,status,kind);
+        LOGW("chat: rejected stage=%s HTTP=%d class=%s",stage,status,kind);
+        json_free(error);
+    }
+    LOGW("chat: native HTTPS send failed stage=%s rc=%08X HTTP=%d",stage,(unsigned)rc,status);
 cleanup:
     if(http)sceHttpTerm();
     if(ssl)sceSslTerm();
@@ -784,10 +811,10 @@ static void *chat_thread(void *argp)
             if(C.queued){snprintf(outgoing,sizeof(outgoing),"%s",C.outgoing);C.queued=0;C.awaiting=1;C.outgoing[0]=0;}
             pthread_mutex_unlock(&C.lock);
             if(outgoing[0]){
-                char reason[32]="",notice[160];
+                char reason[64]="",notice[160];
                 int sent=send_native_message(outgoing,reason,sizeof(reason));
                 pthread_mutex_lock(&C.lock);C.awaiting=0;pthread_mutex_unlock(&C.lock);
-                if(sent<0&&!C.stop){snprintf(notice,sizeof(notice),"%s [%s]",vt_msg("Failed to send chat message"),reason);set_status("%s",notice);push_system(notice);}
+                if(sent<0&&!C.stop){snprintf(notice,sizeof(notice),"%s [%s]",vt_msg("Failed to send chat message"),reason);set_status("%s",reason);push_system(notice);}
                 else if(!C.stop)set_status(vt_msg("Conectado"));
                 /* Anonymous IRC receives the actual broadcast echo; do not fabricate it. */
             }
