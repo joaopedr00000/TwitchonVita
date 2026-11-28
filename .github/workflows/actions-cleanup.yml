@@ -1,0 +1,32 @@
+name: Clean failed and cancelled Actions runs
+on:
+  push:
+    branches: ['maintenance/actions-cleanup']
+permissions:
+  actions: write
+  contents: read
+jobs:
+  cleanup:
+    if: github.repository == 'joaopedr00000/TwitchonVita'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete only previously reviewed failed or cancelled runs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          deleted=0
+          skipped=0
+          for id in 46100722493 46100648023 46099187678 46099112290 46094163872 46094160772 46094152257 46093800732 46091999135 46084959732 46084933160 46084902203 46084897970 46084756143 46084753560 46069271634 46069259893 46068125182 45969148464 45969113286 45968011151 45966727614 45966694358 45966654042 45966570539 45966554688 45965860224 45965251013 45965245399 45964500435 45964472493 45964467377 45964463125 45964456631 45964451971 45964446735 45964442073 45964368453 45964361517 45964355426 45964293964 45964285295 45962086519 45961739892 45961640654 45961525984 45961520903 45961467649; do
+            state=$(gh api "repos/$GH_REPO/actions/runs/$id" --jq '.status + ":" + .conclusion') || { skipped=$((skipped+1)); continue; }
+            case "$state" in
+              completed:failure|completed:cancelled)
+                gh api --method DELETE "repos/$GH_REPO/actions/runs/$id"
+                deleted=$((deleted+1))
+                ;;
+              *) skipped=$((skipped+1));;
+            esac
+          done
+          echo "Deleted: $deleted; skipped: $skipped" | tee -a "$GITHUB_STEP_SUMMARY"
