@@ -51,6 +51,7 @@ typedef struct {
 #define PLAYER_RECORDING_END 6
 #define PLAYER_CREATE_CLIP 7
 #define PLAYER_CHANNEL_VIDEOS 8
+#define PLAYER_FULL_PROFILE 9
 int player_run(const player_params_t *pp, char *err, int errlen);
 
 #endif

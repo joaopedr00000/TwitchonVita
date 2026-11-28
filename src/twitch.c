@@ -896,14 +896,16 @@ static int media_request(const char *url,const char *oauth,const char *post,buf_
     *status=0;
     if(!oauth||!*oauth||strpbrk(oauth,"\r\n")||strlen(oauth)>100)return -CURLE_BAD_FUNCTION_ARGUMENT;
     CURL *c=http_new();if(!c)return -CURLE_FAILED_INIT;
-    CURLcode trust=vt_tls_configure(c);if(trust!=CURLE_OK){http_free(c);return -(int)trust;}
+    CURLcode trust=vt_tls_configure(c);if(trust!=CURLE_OK){http_free(c);if(!post)return http_native_read(url,NULL,oauth,0,b,status,abort_flag);return -(int)trust;}
     curl_easy_setopt(c,CURLOPT_FOLLOWLOCATION,0L);
     char auth[160];snprintf(auth,sizeof(auth),"Authorization: Bearer %s",oauth);
     struct curl_slist *h=NULL,*next;
     h=curl_slist_append(h,"Client-ID: " TWITCH_CLIENT_ID);if(!h){http_free(c);return -CURLE_OUT_OF_MEMORY;}
     next=curl_slist_append(h,auth);if(!next){curl_slist_free_all(h);http_free(c);return -1;}h=next;
     int rc=http_request(c,url,post,h,b,status,abort_flag);
-    curl_slist_free_all(h);http_free(c);return rc;
+    curl_slist_free_all(h);http_free(c);
+    if(!post&&rc==-(int)CURLE_SSL_CACERT_BADFILE&&!*status&&!(abort_flag&&*abort_flag))return http_native_read(url,NULL,oauth,0,b,status,abort_flag);
+    return rc;
 }
 static int media_user_id_detail(const char *login,const char *oauth,char *id,size_t cap,long *status_out,int *net_out,volatile int *abort_flag){
     char check[96],url[160];if(twitch_channel_url(login,check,sizeof(check))<0)return -1;
@@ -917,6 +919,47 @@ static int media_user_id_detail(const char *login,const char *oauth,char *id,siz
 }
 static int media_user_id(const char *login,const char *oauth,char *id,size_t cap,volatile int *abort_flag){
     long status=0;int net=0;return media_user_id_detail(login,oauth,id,cap,&status,&net,abort_flag);
+}
+int twitch_fetch_about(const char *login,const char *oauth,twitch_about_t *out,volatile int *abort_flag){
+    memset(out,0,sizeof(*out));out->followers=-1;
+    char check[96],url[256],id[32]="";buf_t b={0};long status=0;
+    if(twitch_channel_url(login,check,sizeof(check))<0)return -1;
+    if(oauth&&*oauth){
+        snprintf(url,sizeof(url),"https://api.twitch.tv/helix/users?login=%s",login);
+        if(!media_request(url,oauth,NULL,&b,&status,abort_flag)&&status==200){
+            json_t *root=json_parse((const char*)b.data);
+            snprintf(out->created,sizeof(out->created),"%s",json_str(root,"data.0.created_at",""));
+            snprintf(out->bio,sizeof(out->bio),"%s",json_str(root,"data.0.description",""));
+            snprintf(id,sizeof(id),"%s",json_str(root,"data.0.id",""));json_free(root);
+        }
+        if(numeric_id(id)){
+            snprintf(url,sizeof(url),"https://api.twitch.tv/helix/channels/followers?first=1&broadcaster_id=%s",id);
+            if(!media_request(url,oauth,NULL,&b,&status,abort_flag)&&status==200){
+                json_t *root=json_parse((const char*)b.data);double n=json_num(root,"total",-1);if(n>=0&&n<=2147483647.)out->followers=(int)n;json_free(root);
+            }
+        }
+    }
+    if(!(abort_flag&&*abort_flag)){
+        /* Independent public read; fields can disappear from Twitch's GQL. */
+        char body[512];snprintf(body,sizeof(body),"{\"query\":\"query { user(login: \\\"%s\\\") { description createdAt followers { totalCount } } }\"}",login);
+        if(!http_native_read("https://gql.twitch.tv/gql",body,NULL,1,&b,&status,abort_flag)&&status==200){
+            json_t *root=json_parse((const char*)b.data);
+            if(!out->bio[0])snprintf(out->bio,sizeof(out->bio),"%s",json_str(root,"data.user.description",""));
+            if(!out->created[0])snprintf(out->created,sizeof(out->created),"%s",json_str(root,"data.user.createdAt",""));
+            double n=json_num(root,"data.user.followers.totalCount",-1);if(out->followers<0&&n>=0&&n<=2147483647.)out->followers=(int)n;json_free(root);
+        }
+        snprintf(body,sizeof(body),"{\"query\":\"query { user(login: \\\"%s\\\") { channel { socialMedias { name url } } } }\"}",login);
+        if(!http_native_read("https://gql.twitch.tv/gql",body,NULL,1,&b,&status,abort_flag)&&status==200){
+            json_t *root=json_parse((const char*)b.data),*arr=json_path(root,"data.user.channel.socialMedias");size_t used=0;
+            if(arr&&arr->type==JSON_ARRAY)for(json_t *j=arr->child;j&&used<sizeof(out->links)-1;j=j->next){
+                const char *link=json_str(j,"url",""),*name=json_str(j,"name","");
+                if(strncmp(link,"https://",8)||strpbrk(link,"\r\n"))continue;
+                int n=snprintf(out->links+used,sizeof(out->links)-used,"%s%.40s: %.100s",used?"\n":"",name,link);
+                if(n<0||(size_t)n>=sizeof(out->links)-used)break;used+=(size_t)n;
+            }json_free(root);
+        }
+    }
+    buf_free(&b);return 0;
 }
 static int media_duration(const char *s){
     int total=0;
@@ -942,12 +985,13 @@ static int media_public_gql(const char *login,int kind,twitch_media_t *out,int m
         snprintf(body,sizeof(body),"{\"query\":\"query { user(login: \\\"%s\\\") { id videos(first: %d%s, sort: TIME) { edges { node { id title createdAt lengthSeconds broadcastType previewThumbnailURL(width:160,height:90) } } } } }\"}",login,max,filter);
     }
     CURL *c=http_new();if(!c){*net=-CURLE_FAILED_INIT;return -1;}
-    CURLcode trust=vt_tls_configure(c);if(trust!=CURLE_OK){*net=-(int)trust;http_free(c);return -1;}
+    CURLcode trust=vt_tls_configure(c);
     curl_easy_setopt(c,CURLOPT_FOLLOWLOCATION,0L);
     struct curl_slist *h=curl_slist_append(NULL,"Client-ID: " TWITCH_CLIENT_ID),*next=h?curl_slist_append(h,"Content-Type: text/plain;charset=UTF-8"):NULL;
     if(!next){curl_slist_free_all(h);http_free(c);*net=-CURLE_OUT_OF_MEMORY;return -1;}h=next;
     buf_t b={0};int n=-1;
-    *net=http_request(c,"https://gql.twitch.tv/gql",body,h,&b,status,abort_flag);
+    *net=trust==CURLE_OK?http_request(c,"https://gql.twitch.tv/gql",body,h,&b,status,abort_flag):-(int)trust;
+    if((trust!=CURLE_OK||*net==-(int)CURLE_SSL_CACERT_BADFILE)&&!*status&&!(abort_flag&&*abort_flag))*net=http_native_read("https://gql.twitch.tv/gql",body,NULL,1,&b,status,abort_flag);
     if(!*net&&*status==200&&b.data){
         json_t *root=json_parse((const char*)b.data);
         const char *id=json_str(root,"data.user.id","");
@@ -1018,12 +1062,15 @@ int twitch_vod_variants(const char *id,const char *oauth,m3u8_variant_t *out,int
     if(!numeric_id(id))return -1;
     char body[512];snprintf(body,sizeof(body),"{\"query\":\"query { videoPlaybackAccessToken(id: \\\"%s\\\", params: {platform: \\\"web\\\", playerBackend: \\\"mediaplayer\\\", playerType: \\\"site\\\"}) { value signature } }\"}",id);
     CURL *c=http_new();buf_t b={0};long status=0;int n=-1;struct curl_slist *h=NULL;
-    if(!c||vt_tls_configure(c)!=CURLE_OK)goto done;
+    if(!c)goto done;
+    CURLcode trust=vt_tls_configure(c);
     curl_easy_setopt(c,CURLOPT_FOLLOWLOCATION,0L);
     h=curl_slist_append(h,"Client-ID: " TWITCH_CLIENT_ID);if(!h)goto done;
     struct curl_slist *next=curl_slist_append(h,"Content-Type: text/plain;charset=UTF-8");if(!next)goto done;h=next;
     if(oauth&&*oauth&&!strpbrk(oauth,"\r\n")){char a[160];snprintf(a,sizeof(a),"Authorization: OAuth %s",oauth);next=curl_slist_append(h,a);if(!next)goto done;h=next;}
-    if(http_request(c,"https://gql.twitch.tv/gql",body,h,&b,&status,abort_flag)<0||status!=200)goto done;
+    int net=trust==CURLE_OK?http_request(c,"https://gql.twitch.tv/gql",body,h,&b,&status,abort_flag):-(int)trust;
+    if((trust!=CURLE_OK||net==-(int)CURLE_SSL_CACERT_BADFILE)&&!status&&!(abort_flag&&*abort_flag))net=http_native_read("https://gql.twitch.tv/gql",body,oauth,1,&b,&status,abort_flag);
+    if(net<0||status!=200)goto done;
     json_t *root=json_parse((const char*)b.data);
     const char *token=json_str(root,"data.videoPlaybackAccessToken.value",""),*sig=json_str(root,"data.videoPlaybackAccessToken.signature","");
     char *et=*token?curl_easy_escape(c,token,0):NULL,*es=*sig?curl_easy_escape(c,sig,0):NULL;
@@ -1031,11 +1078,12 @@ int twitch_vod_variants(const char *id,const char *oauth,m3u8_variant_t *out,int
     int len=et&&es?snprintf(url,sizeof(url),"https://usher.ttvnw.net/vod/%s.m3u8?allow_source=true&allow_audio_only=false&supported_codecs=h264&nauth=%s&nauthsig=%s&player=twitchweb",id,et,es):-1;
     curl_free(et);curl_free(es);json_free(root);
     if(len<0||(size_t)len>=sizeof(url))goto done;
-    if(http_request(c,url,NULL,NULL,&b,&status,abort_flag)<0||status!=200)goto done;
+    if(trust!=CURLE_OK){snprintf(err,errlen,"VOD TLS setup failed (%d)",(int)trust);goto done;}
+    net=http_request(c,url,NULL,NULL,&b,&status,abort_flag);if(net<0||status!=200){snprintf(err,errlen,"VOD playlist HTTP %ld curl %d",status,-net);goto done;}
     n=m3u8_parse_master((const char*)b.data,out,max);
     if(n<=0)n=-1;
 done:
-    if(n<0)snprintf(err,errlen,"VOD unavailable / Vídeo indisponível (HTTP %ld)",status);
+    if(n<0&&!err[0])snprintf(err,errlen,"VOD unavailable / Vídeo indisponível (HTTP %ld)",status);
     curl_slist_free_all(h);buf_free(&b);http_free(c);return n;
 }
 int twitch_create_clip(void *arg,volatile int *abort_flag){

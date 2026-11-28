@@ -90,3 +90,7 @@ Published clips with an available source VOD and known offset can be previewed t
 ### Experimental Profile/TLS Test 14
 
 Batch changes from Test 13 feedback: explicit packaged CA file on Vita (strict peer/hostname verification retained), video library from live profile with live reconnect on return, own profile with Live/Videos/Clips/Saved/Continue/About/Session tabs, top-right sign-in in handheld mode, grouped settings, logo-only TV header, and direct playback without a pre-play quality chooser. Hardware TLS and catalog behavior still need validation.
+
+### Experimental Catalog/TLS Test 15
+
+Uses a memory-backed CAINFO_BLOB on modern libcurl and verified native Sony HTTPS read-only fallback for Twitch API requests (shared native SSL lifecycle with chat). Does not disable TLS verification. Adds detailed transport diagnostics, complete profile access from live overlay by name/avatar, extended About with public metadata and social links when returned, fork credits, separate Explore and Categories navigation in both layouts (handheld order Explore, Categories, Settings). Hardware tests pending.

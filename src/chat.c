@@ -800,6 +800,7 @@ static int send_native_message(const char *message,char *reason,size_t cap)
     const char *stage="TLS";
     int ssl=0,http=0,rc=-1,status=0,ret=-1;
     if(!numeric_id(C.sender_id)||twitch_json_escape(message,escaped,sizeof(escaped))<0){snprintf(reason,cap,"AUTH");return -1;}
+    http_native_lock();
     if(sceSysmoduleIsLoaded(SCE_SYSMODULE_HTTPS)!=0){
         rc=sceSysmoduleLoadModule(SCE_SYSMODULE_HTTPS);
         if(rc<0)goto done;
@@ -851,6 +852,7 @@ done:
 cleanup:
     if(http)sceHttpTerm();
     if(ssl)sceSslTerm();
+    http_native_unlock();
     return ret;
 }
 static void *chat_thread(void *argp)

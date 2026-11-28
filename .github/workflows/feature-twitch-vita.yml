@@ -120,13 +120,13 @@ jobs:
             assert b'Twitch\x00' in sfo
           print('PASS experimental VitaSDK VPK, version 01.34, title ID and trusted IRC CA bundle')
           PY
-          cp build-ci/VitaTwitch.vpk Twitch-1.34-ProfileTLS14.vpk
-          sha256sum Twitch-1.34-ProfileTLS14.vpk > SHA256SUMS.txt
+          cp build-ci/VitaTwitch.vpk Twitch-1.34-CatalogTLS15.vpk
+          sha256sum Twitch-1.34-CatalogTLS15.vpk > SHA256SUMS.txt
       - uses: actions/upload-artifact@v4
         with:
-          name: Twitch-1.34-ProfileTLS14-EXPERIMENTAL
+          name: Twitch-1.34-CatalogTLS15-EXPERIMENTAL
           path: |
-            Twitch-1.34-ProfileTLS14.vpk
+            Twitch-1.34-CatalogTLS15.vpk
             SHA256SUMS.txt
             ca-bundle.sha256
           retention-days: 14
